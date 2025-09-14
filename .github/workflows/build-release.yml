@@ -1,0 +1,80 @@
+# .github/workflows/build-release.yml
+
+name: Create Cross-Platform Release
+
+# ИЗМЕНЕНИЕ 1: Триггер
+# Сценарий теперь запускается только когда вы отправляете в репозиторий новый тег
+# (например, v1.0.0, v1.0.1 и т.д.)
+on:
+  push:
+    tags:
+      - 'v*' # Любой тег, начинающийся с 'v'
+
+jobs:
+  # ЗАДАЧА 1: Сборка приложения (та же, что и раньше)
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            icon-ext: icns
+            artifact-name: Shorins-CAD-macOS
+            build-path: dist/ShorinsCAD.app
+          - os: windows-latest
+            icon-ext: ico
+            artifact-name: Shorins-CAD-Windows
+            build-path: dist/ShorinsCAD.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name "ShorinsCAD" \
+                      --windowed \
+                      --onefile \
+                      --icon "assets/icon.${{ matrix.icon-ext }}" \
+                      run.py
+      # Теперь мы загружаем артефакты в виде папок, чтобы их было легче найти в следующей задаче
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.build-path }}
+
+  # ЗАДАЧА 2: Создание релиза (новая)
+  release:
+    # Эта задача запустится только ПОСЛЕ успешного завершения задачи 'build'
+    needs: build
+    runs-on: ubuntu-latest # Для создания релиза достаточно любой системы
+
+    steps:
+      # Шаг 1: Скачиваем ВСЕ артефакты (macOS и Windows сборки), созданные в задаче 'build'
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts # Скачать все в эту папку
+
+      # Шаг 2: Архивируем файлы для удобства
+      - name: Archive artifacts
+        run: |
+          for dir in release-artifacts/*; do
+            zip -r "${dir}.zip" "$dir"
+          done
+        
+      # Шаг 3: Создаем релиз и прикрепляем к нему архивы
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Имя тега и название релиза будут взяты из Git тега, который вы создали
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          # Указываем, какие файлы прикрепить к релизу (все .zip архивы)
+          files: release-artifacts/*.zip
