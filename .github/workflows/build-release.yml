@@ -31,11 +31,11 @@ jobs:
         run: |
           if [ "${{ runner.os }}" == "macOS" ]; then
             echo "ICON_EXT=icns" >> $GITHUB_OUTPUT
-            echo "ASSET_NAME=Shorins-CAD.app.zip" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=ShorinsCAD.app.zip" >> $GITHUB_OUTPUT
             echo "BUILD_PATH=dist/ShorinsCAD.app" >> $GITHUB_OUTPUT
           else
             echo "ICON_EXT=ico" >> $GITHUB_OUTPUT
-            echo "ASSET_NAME=Shorins-CAD.exe" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=ShorinsCAD.exe" >> $GITHUB_OUTPUT
             echo "BUILD_PATH=dist/ShorinsCAD.exe" >> $GITHUB_OUTPUT
           fi
         shell: bash
