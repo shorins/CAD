@@ -2,77 +2,83 @@
 
 name: Create Cross-Platform Release
 
-# Это дает токену право создавать релизы и загружать в них файлы.
 permissions:
   contents: write
 
-# ИЗМЕНЕНИЕ 1: Триггер
-# Сценарий теперь запускается только когда вы отправляете в репозиторий новый тег
-# (например, v1.0.0, v1.0.1 и т.д.)
 on:
   push:
     tags:
-      - 'v*' # Любой тег, начинающийся с 'v'
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
-  # ЗАДАЧА 1: Сборка приложения (та же, что и раньше)
   build:
+    # Упрощаем матрицу, оставляем только ОС
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
-        include:
-          - os: macos-latest
-            icon-ext: icns
-            artifact-name: Shorins-CAD-macOS
-            build-path: dist/ShorinsCAD.app
-          - os: windows-latest
-            icon-ext: ico
-            artifact-name: Shorins-CAD-Windows
-            build-path: dist/ShorinsCAD.exe
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # ======================= ИЗМЕНЕНИЕ 1 (НОВЫЙ ШАГ) =======================
+      # Создаем переменные в зависимости от ОС. Это надежнее, чем сложная матрица.
+      - name: Set up build variables
+        id: vars
+        run: |
+          if [ "${{ runner.os }}" == "macOS" ]; then
+            echo "ICON_EXT=icns" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=Shorins-CAD.app.zip" >> $GITHUB_OUTPUT
+            echo "BUILD_PATH=dist/ShorinsCAD.app" >> $GITHUB_OUTPUT
+          else
+            echo "ICON_EXT=ico" >> $GITHUB_OUTPUT
+            echo "ASSET_NAME=Shorins-CAD.exe" >> $GITHUB_OUTPUT
+            echo "BUILD_PATH=dist/ShorinsCAD.exe" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+      # =====================================================================
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
+      
+      # Используем созданные переменные
       - name: Build with PyInstaller
-        run: > # Используем '>', чтобы yaml считал следующую строку как одну команду
-          pyinstaller --name "ShorinsCAD" --windowed --onefile --icon "assets/icon.${{ matrix.icon-ext }}" run.py
-      # Теперь мы загружаем артефакты в виде папок, чтобы их было легче найти в следующей задаче
-      # Архивируем .app бандл в .zip архив, но только на macOS
+        run: >
+          pyinstaller --name "ShorinsCAD" --windowed --onefile --icon "assets/icon.${{ steps.vars.outputs.ICON_EXT }}" run.py
+
+      # Используем созданные переменные
       - name: Archive macOS App Bundle
         if: runner.os == 'macOS'
-        run: zip -r "dist/${{ matrix.release_asset_name }}" "dist/ShorinsCAD.app"
+        run: zip -r "dist/${{ steps.vars.outputs.ASSET_NAME }}" "${{ steps.vars.outputs.BUILD_PATH }}"
 
+      # Используем созданные переменные
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.release_asset_name }}
-          # Для macOS загружаем созданный .zip, для Windows - .exe
-          path: "dist/${{ matrix.release_asset_name }}"
+          name: ${{ steps.vars.outputs.ASSET_NAME }}
+          path: "dist/${{ steps.vars.outputs.ASSET_NAME }}"
 
-  # ЗАДАЧА 2: Создание релиза (новая)
   release:
-    # Эта задача запустится только ПОСЛЕ успешного завершения задачи 'build'
     needs: build
-    runs-on: ubuntu-latest # Для создания релиза достаточно любой системы
-
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
-      # Скачиваем ВСЕ артефакты (macOS и Windows сборки), созданные в задаче 'build'
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-assets # Скачать все в эту папку
-
+          path: release-assets
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
-          # Просто загружаем все файлы, которые мы скачали
-          files: release-assets/*
+          # Загружаем все, что скачали - теперь это будут .zip и .exe
+          files: release-assets/*/*
