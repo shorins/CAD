@@ -36,12 +36,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Build with PyInstaller
-        run: |
-          pyinstaller --name "ShorinsCAD" \
-                      --windowed \
-                      --onefile \
-                      --icon "assets/icon.${{ matrix.icon-ext }}" \
-                      run.py
+        run: > # Используем '>', чтобы yaml считал следующую строку как одну команду
+          pyinstaller --name "Shorins CAD" --windowed --onefile --icon "assets/icon.${{ matrix.icon-ext }}" run.py
       # Теперь мы загружаем артефакты в виде папок, чтобы их было легче найти в следующей задаче
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
