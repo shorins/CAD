@@ -49,6 +49,5 @@ class AppSettings(QObject):
         """Сбрасывает текущие настройки к значениям по умолчанию."""
         self.settings = copy.deepcopy(self.defaults)
         self.settings_changed.emit()
-        self.save() # Сразу сохраняем сброшенные настройки
 
 settings = AppSettings()

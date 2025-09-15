@@ -1,15 +1,14 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QSpinBox, 
                                QPushButton, QDialogButtonBox, QColorDialog, QLabel)
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor
 from .settings import settings
 
 class ColorPickerButton(QPushButton):
-    # ... (этот класс остается без изменений) ...
+    """Кастомная кнопка для выбора цвета с предпросмотром."""
     def __init__(self, initial_color, parent=None):
         super().__init__(parent)
-        self.color = QColor(initial_color)
-        self.setText(self.color.name(QColor.NameFormat.HexArgb))
-        self.setStyleSheet(f"background-color: {self.color.name()}; color: white; border: 1px solid white;")
+        # Устанавливаем стиль и текст при инициализации
+        self.set_color(QColor(initial_color))
         self.clicked.connect(self.pick_color)
 
     def pick_color(self):
@@ -18,10 +17,10 @@ class ColorPickerButton(QPushButton):
             self.set_color(new_color)
 
     def set_color(self, color):
+        """Обновляет цвет и внешний вид кнопки."""
         self.color = QColor(color)
         self.setText(self.color.name(QColor.NameFormat.HexArgb))
         self.setStyleSheet(f"background-color: {self.color.name()}; color: white; border: 1px solid white;")
-
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -55,19 +54,17 @@ class SettingsDialog(QDialog):
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | 
             QDialogButtonBox.StandardButton.Cancel |
-            QDialogButtonBox.StandardButton.RestoreDefaults # <-- Новая кнопка
+            QDialogButtonBox.StandardButton.RestoreDefaults
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
-        # Привязываем кнопку сброса к нашему методу
         button_box.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(self.restore_defaults)
         layout.addWidget(button_box)
         
-        # Загружаем текущие настройки в поля
         self.load_settings_to_ui()
 
     def load_settings_to_ui(self):
-        """Загружает настройки из объекта settings в элементы UI."""
+        """Загружает настройки из объекта settings в элементы UI с проверками."""
         grid_step = settings.get("grid_step") or settings.defaults["grid_step"]
         self.grid_step_input.setValue(grid_step)
         
@@ -79,6 +76,7 @@ class SettingsDialog(QDialog):
         
     def restore_defaults(self):
         """Сбрасывает настройки в UI к значениям по умолчанию."""
+        # Мы не меняем глобальный объект settings, а только отображение в окне
         self.grid_step_input.setValue(settings.defaults["grid_step"])
         colors = settings.defaults["colors"]
         self.canvas_bg_picker.set_color(colors["canvas_bg"])
@@ -87,6 +85,7 @@ class SettingsDialog(QDialog):
         self.line_object_picker.set_color(colors["line_object"])
 
     def accept(self):
+        """Применяет и сохраняет настройки."""
         settings.set("grid_step", self.grid_step_input.value())
         colors = {
             "canvas_bg": self.canvas_bg_picker.color.name(QColor.NameFormat.HexArgb),

@@ -1,7 +1,7 @@
 {
     "grid_step": 50,
     "colors": {
-        "canvas_bg": "#ffffffff",
+        "canvas_bg": "#ff45490e",
         "grid_minor": "#1effffff",
         "grid_major": "#61ffffff",
         "line_object": "#ddffffff"

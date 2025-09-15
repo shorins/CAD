@@ -15,15 +15,14 @@ class CanvasWidget(QWidget):
         super().__init__(parent)
         self.scene = scene
         self.scene.scene_changed.connect(self.update)
-        # Подписываемся на сигнал от Модели настроек
         settings.settings_changed.connect(self.on_settings_changed)
 
         self.line_tool_action = line_tool_action
         
         self.setMouseTracking(True)
-        self.setAutoFillBackground(True)
+        self.setAutoFillBackground(True) # Это свойство нужно для setStyleSheet
         
-        self.on_settings_changed()
+        self.on_settings_changed() # Вызываем при старте, чтобы установить фон
 
         self.start_pos = None
         self.current_pos = None
@@ -31,19 +30,15 @@ class CanvasWidget(QWidget):
         self.camera_pos = QPointF(0, 0)
         self._initial_center_done = False
 
-    def update_background_color(self):
-        """Обновляет цвет фона холста из настроек."""
-        p = self.palette()
-        colors = settings.get("colors") or settings.defaults.get("colors", {})
-        bg_color = colors.get("canvas_bg", "#2D2D2D")  # Default from settings.defaults
-        p.setColor(self.backgroundRole(), QColor(bg_color))
-        self.setPalette(p)
-
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
+        # Получаем настройки с "защитой" от их отсутствия
         colors = settings.get("colors") or settings.defaults["colors"]
         bg_color = colors.get("canvas_bg", "#2D2D2D")
+        
+        # Устанавливаем фон через прямое указание стиля. Это надежнее.
         self.setStyleSheet(f"background-color: {bg_color};")
+        
         self.update() # Запросить полную перерисовку
 
     def resizeEvent(self, event):
@@ -51,7 +46,8 @@ class CanvasWidget(QWidget):
         if not self._initial_center_done:
             self.camera_pos = QPointF(-self.width() / 2, -self.height() / 2)
             self._initial_center_done = True
-
+            
+    # ... (map_to_scene, map_from_scene и другие обработчики мыши остаются без изменений)
     def map_to_scene(self, screen_pos: QPointF) -> QPointF:
         return screen_pos + self.camera_pos
 
@@ -69,7 +65,6 @@ class CanvasWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         self.cursor_pos_changed.emit(event.position())
-
         if self.start_pos and event.buttons() & Qt.MouseButton.LeftButton:
             self.current_pos = event.position()
             self.update()
@@ -102,10 +97,10 @@ class CanvasWidget(QWidget):
         painter.end()
 
     def _draw_grid(self, painter: QPainter):
-        colors = settings.get("colors") or settings.defaults.get("colors", {})
-        pen_minor = QPen(QColor(colors.get("grid_minor", "#1EFFFFFF")), 0.5)
-        pen_major = QPen(QColor(colors.get("grid_major", "#61FFFFFF")), 1)
-        grid_size = settings.get("grid_step") or settings.defaults.get("grid_step", 50)
+        colors = settings.get("colors") or settings.defaults["colors"]
+        pen_minor = QPen(QColor(colors.get("grid_minor", "#000000")), 0.5)
+        pen_major = QPen(QColor(colors.get("grid_major", "#000000")), 1)
+        grid_size = settings.get("grid_step") or settings.defaults["grid_step"]
         major_grid_interval = 5
 
         width, height = self.width(), self.height()
@@ -139,8 +134,8 @@ class CanvasWidget(QWidget):
         painter.drawLine(0, int(origin_screen.y()), self.width(), int(origin_screen.y()))
 
     def _draw_scene_objects(self, painter: QPainter):
-        colors = settings.get("colors") or settings.defaults.get("colors", {})
-        pen = QPen(QColor(colors.get("line_object", "#DDFFFFFF")), 2)
+        colors = settings.get("colors") or settings.defaults["colors"]
+        pen = QPen(QColor(colors.get("line_object", "#FFFFFF")), 2)
         painter.setPen(pen)
 
         for obj in self.scene.objects:
@@ -156,10 +151,6 @@ class CanvasWidget(QWidget):
     
     def _draw_preview(self, painter: QPainter):
         if self.start_pos and self.current_pos:
-            # Используем акцентный цвет из общих настроек для единообразия
-            # В будущем его тоже можно будет вынести в настройки холста
-            colors = settings.get("colors") or settings.defaults.get("colors", {})
-            accent_color = colors.get("line_object", "#DDFFFFFF")
-            pen = QPen(QColor(accent_color), 1, Qt.PenStyle.DashLine)
+            pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
