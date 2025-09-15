@@ -11,6 +11,8 @@ from .core.scene import Scene
 from .core.geometry import Line, Point
 from .canvas_widget import CanvasWidget
 from .theme import get_stylesheet
+from .settings_dialog import SettingsDialog
+from .settings import settings
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -48,10 +50,13 @@ class MainWindow(QMainWindow):
         self.line_tool_action.setCheckable(True)
         self.line_tool_action.setChecked(True) # Активен по умолчанию
 
+        self.settings_action = QAction(QIcon.fromTheme("preferences-system"), "Настройки...", self)
+
         self.save_action.triggered.connect(self.save_project)
         self.open_action.triggered.connect(self.open_project)
         self.new_action.triggered.connect(self.new_project)
         self.exit_action.triggered.connect(self.close)
+        self.settings_action.triggered.connect(self.open_settings)
 
     def _create_menus(self):
         file_menu = self.menuBar().addMenu("&Файл")
@@ -59,6 +64,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.save_action)
         file_menu.addSeparator()
+        file_menu.addAction(self.settings_action)
         file_menu.addAction(self.exit_action)
         self.exit_action.triggered.connect(self.close)
 
@@ -150,6 +156,10 @@ class MainWindow(QMainWindow):
 
             except Exception as e:
                 print(f"Ошибка открытия файла: {e}")
+
+    def open_settings(self):
+        dialog = SettingsDialog(self)
+        dialog.exec() # exec() открывает модальное окно
 
 def run():
     app = QApplication(sys.argv)

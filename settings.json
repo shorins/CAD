@@ -1,0 +1,9 @@
+{
+    "grid_step": 50,
+    "colors": {
+        "canvas_bg": "#ffffffff",
+        "grid_minor": "#1effffff",
+        "grid_major": "#61ffffff",
+        "line_object": "#ddffffff"
+    }
+}
