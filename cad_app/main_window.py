@@ -13,6 +13,7 @@ from .canvas_widget import CanvasWidget
 from .theme import get_stylesheet
 from .settings_dialog import SettingsDialog
 from .settings import settings
+from .line_input_panel import LineInputPanel
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -34,10 +35,14 @@ class MainWindow(QMainWindow):
         self._create_menus()
         self._create_toolbars()
         self._create_status_bar()
+        self._create_line_input_panel()
         
         # Связываем сигнал из Canvas с методом в StatusBar
         self.canvas.cursor_pos_changed.connect(self.update_cursor_pos_label)
         self.canvas.line_info_changed.connect(self.update_line_info_label)
+        
+        # Связываем выбор инструмента "линия" с показом/скрытием панели ввода
+        self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
 
     def _create_actions(self):
         # Используем стандартные иконки Qt для простоты
@@ -109,6 +114,20 @@ class MainWindow(QMainWindow):
         # Уведомляем canvas о изменении режима
         if hasattr(self, 'canvas'):
             self.canvas.on_construction_mode_changed()
+    
+    def _on_line_tool_toggled(self, checked):
+        """Обработчик переключения инструмента 'линия'."""
+        if hasattr(self, 'line_input_panel'):
+            if checked:
+                self.line_input_panel.show_panel()
+            else:
+                self.line_input_panel.hide_panel()
+    
+    def _on_line_build_requested(self, start_point: Point, end_point: Point):
+        """Обработчик запроса на построение линии из панели ввода."""
+        # Создаем линию из переданных точек
+        line = Line(start_point, end_point)
+        self.scene.add_object(line)
 
     def _create_status_bar(self):
         # Строка состояния
@@ -125,6 +144,27 @@ class MainWindow(QMainWindow):
         # Добавляем виджеты на ПОЛУЧЕННЫЙ объект строки состояния
         status_bar.addPermanentWidget(self.cursor_pos_label)
         status_bar.addPermanentWidget(self.line_info_label)
+    
+    def _create_line_input_panel(self):
+        """Создает панель ввода координат для линии."""
+        # Создаем панель ввода
+        self.line_input_panel = LineInputPanel(self)
+        
+        # Подключаем сигнал построения линии
+        self.line_input_panel.line_requested.connect(self._on_line_build_requested)
+        
+        # Добавляем панель в нижнюю часть окна (BottomToolBarArea)
+        # Используем addToolBar, чтобы панель вела себя как toolbar
+        input_toolbar = QToolBar("Ввод координат")
+        input_toolbar.addWidget(self.line_input_panel)
+        input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, input_toolbar)
+        
+        # Показываем панель, если инструмент "линия" активен (он активен по умолчанию)
+        if self.line_tool_action.isChecked():
+            self.line_input_panel.show_panel()
+        else:
+            self.line_input_panel.hide_panel()
 
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
