@@ -93,8 +93,9 @@ class MainWindow(QMainWindow):
         self.cursor_pos_label.setText(f"X: {scene_pos.x():.2f}, Y: {scene_pos.y():.2f}")
 
     def new_project(self):
-        """Очищает сцену для создания нового проекта."""
+        """Очищает сцену и сбрасывает настройки для создания нового проекта."""
         self.scene.clear()
+        settings.reset_to_defaults()
 
     def save_project(self):
         """Сохраняет текущую сцену в JSON файл."""
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
             # Готовим данные для сохранения
             project_data = {
                 "version": "1.0",
+                "settings": settings.settings,
                 "objects": [obj.to_dict() for obj in self.scene.objects]
             }
 
@@ -137,8 +139,14 @@ class MainWindow(QMainWindow):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     project_data = json.load(f)
                 
-                # Перед загрузкой очищаем текущую сцену
+                # Перед загрузкой очищаем текущую сцену и сбрасываем настройки
                 self.scene.clear()
+                settings.reset_to_defaults()
+
+                # Загружаем настройки проекта, если они есть
+                if "settings" in project_data:
+                    for key, value in project_data["settings"].items():
+                        settings.set(key, value)
 
                 # Воссоздаем объекты из файла
                 new_objects = []

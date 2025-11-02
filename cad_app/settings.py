@@ -5,9 +5,8 @@ from PySide6.QtCore import QObject, Signal
 class AppSettings(QObject):
     settings_changed = Signal()
 
-    def __init__(self, filename="settings.json"):
+    def __init__(self):
         super().__init__()
-        self.filename = filename
         self.defaults = {
             "grid_step": 50,
             "colors": {
@@ -19,7 +18,6 @@ class AppSettings(QObject):
         }
         # Используем deepcopy, чтобы вложенный словарь colors не изменялся
         self.settings = copy.deepcopy(self.defaults)
-        self.load()
 
     def get(self, key, default=None):
         return self.settings.get(key, default)
@@ -29,21 +27,12 @@ class AppSettings(QObject):
         self.settings_changed.emit()
 
     def save(self):
-        try:
-            with open(self.filename, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=4)
-        except Exception as e:
-            print(f"Ошибка сохранения настроек: {e}")
+        # This method is no longer needed as settings are not saved to a global file
+        pass
 
-    def load(self):
-        try:
-            with open(self.filename, 'r', encoding='utf-8') as f:
-                loaded_settings = json.load(f)
-                self.settings.update(loaded_settings)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass # Если файла нет или он пустой, используем defaults
-        except Exception as e:
-            print(f"Ошибка загрузки настроек: {e}")
+    def load():
+        # This method is no longer needed as settings are not loaded from a global file
+        pass
 
     def reset_to_defaults(self):
         """Сбрасывает текущие настройки к значениям по умолчанию."""
