@@ -79,15 +79,36 @@ class CanvasWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if not self._initial_center_done:
-            self.camera_pos = QPointF(-self.width() / 2, -self.height() / 2)
+            # Инициализируем камеру так, чтобы центр экрана соответствовал (0, 0) в сцене
+            # С учетом инверсии Y: 
+            # center_screen = (width/2, height/2)
+            # map_to_scene(center_screen) должно быть (0, 0)
+            # scene_y = height/2 - height/2 + camera_y = camera_y = 0
+            # Значит camera_y должен быть 0, а не -height/2
+            self.camera_pos = QPointF(-self.width() / 2, 0)
             self._initial_center_done = True
             
     # ... (map_to_scene, map_from_scene и другие обработчики мыши остаются без изменений)
     def map_to_scene(self, screen_pos: QPointF) -> QPointF:
-        return screen_pos + self.camera_pos
+        """Преобразует экранные координаты в сценовые координаты с инверсией Y.
+        В математической системе координат Y увеличивается вверх."""
+        # Инвертируем Y: в экранных координатах Y увеличивается вниз (0 вверху, height внизу),
+        # в математических - вверх (положительные значения вверху, отрицательные внизу)
+        # Формула: scene_y = height/2 - screen_y + camera_y
+        # Это обеспечивает: screen_y=0 (вверху) -> scene_y положительное (вверх)
+        #                   screen_y=height (внизу) -> scene_y отрицательное (вниз)
+        scene_x = screen_pos.x() + self.camera_pos.x()
+        scene_y = self.height() / 2 - screen_pos.y() + self.camera_pos.y()
+        return QPointF(scene_x, scene_y)
 
     def map_from_scene(self, scene_pos: QPointF) -> QPointF:
-        return scene_pos - self.camera_pos
+        """Преобразует сценовые координаты в экранные координаты с инверсией Y."""
+        # Инвертируем Y обратно для экранных координат
+        # Из scene_y = height/2 - screen_y + camera_y следует:
+        # screen_y = height/2 - (scene_y - camera_y) = height/2 - scene_y + camera_y
+        screen_x = scene_pos.x() - self.camera_pos.x()
+        screen_y = self.height() / 2 - (scene_pos.y() - self.camera_pos.y())
+        return QPointF(screen_x, screen_y)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape and self.start_pos:
@@ -165,8 +186,11 @@ class CanvasWidget(QWidget):
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             else:
                 # Панорамирование - перемещаем камеру
+                # С учетом инверсии Y: движение мыши вниз должно увеличивать camera_y
+                # чтобы видеть больше объектов вверху
                 delta = event.position() - self.pan_start_pos
-                self.camera_pos -= delta
+                # Инвертируем delta_y для правильной работы панорамирования
+                self.camera_pos -= QPointF(delta.x(), -delta.y())
                 self.pan_start_pos = event.position()
                 self.update()
                 return  # Прерываем выполнение, чтобы не обрабатывать другие события
@@ -220,8 +244,12 @@ class CanvasWidget(QWidget):
 
         start_x_index = math.floor(scene_top_left.x() / grid_size)
         end_x_index = math.ceil(scene_bottom_right.x() / grid_size)
-        start_y_index = math.floor(scene_top_left.y() / grid_size)
-        end_y_index = math.ceil(scene_bottom_right.y() / grid_size)
+        # С учетом инверсии Y: scene_top_left.y() теперь больше scene_bottom_right.y()
+        # поэтому нужно использовать min/max для правильного диапазона
+        scene_y_min = min(scene_top_left.y(), scene_bottom_right.y())
+        scene_y_max = max(scene_top_left.y(), scene_bottom_right.y())
+        start_y_index = math.floor(scene_y_min / grid_size)
+        end_y_index = math.ceil(scene_y_max / grid_size)
 
         for i in range(start_x_index, end_x_index + 1):
             is_major = (i % major_grid_interval == 0)

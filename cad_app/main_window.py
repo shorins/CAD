@@ -168,6 +168,7 @@ class MainWindow(QMainWindow):
 
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
+        # map_to_scene уже возвращает координаты в математической системе (Y вверх)
         scene_pos = self.canvas.map_to_scene(pos)
         self.cursor_pos_label.setText(f"X: {scene_pos.x():.2f}, Y: {scene_pos.y():.2f}")
     
