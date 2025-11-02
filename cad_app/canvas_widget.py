@@ -54,10 +54,36 @@ class CanvasWidget(QWidget):
     def map_from_scene(self, scene_pos: QPointF) -> QPointF:
         return scene_pos - self.camera_pos
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self.start_pos:
+            self.start_pos = None
+            self.current_pos = None
+            self.update()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.line_tool_action.isChecked():
-            self.start_pos = event.position()
-            self.current_pos = self.start_pos
+        if self.line_tool_action.isChecked():
+            if event.button() == Qt.MouseButton.LeftButton:
+                if self.start_pos is None:
+                    # Первый клик: начинаем рисовать линию
+                    self.start_pos = event.position()
+                    self.current_pos = self.start_pos
+                else:
+                    # Второй клик: завершаем линию
+                    start_scene_pos = self.map_to_scene(self.start_pos)
+                    end_scene_pos = self.map_to_scene(event.position())
+                    start_point = Point(start_scene_pos.x(), start_scene_pos.y())
+                    end_point = Point(end_scene_pos.x(), end_scene_pos.y())
+                    line = Line(start_point, end_point)
+                    self.scene.add_object(line)
+                    self.start_pos = None
+                    self.current_pos = None
+            elif event.button() == Qt.MouseButton.RightButton and self.start_pos:
+                # Отмена рисования правой кнопкой мыши
+                self.start_pos = None
+                self.current_pos = None
         elif event.button() == Qt.MouseButton.MiddleButton:
             self.pan_start_pos = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -65,7 +91,7 @@ class CanvasWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         self.cursor_pos_changed.emit(event.position())
-        if self.start_pos and event.buttons() & Qt.MouseButton.LeftButton:
+        if self.start_pos:
             self.current_pos = event.position()
             self.update()
         elif self.pan_start_pos and event.buttons() & Qt.MouseButton.MiddleButton:
@@ -75,16 +101,7 @@ class CanvasWidget(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.start_pos:
-            start_scene_pos = self.map_to_scene(self.start_pos)
-            end_scene_pos = self.map_to_scene(event.position())
-            start_point = Point(start_scene_pos.x(), start_scene_pos.y())
-            end_point = Point(end_scene_pos.x(), end_scene_pos.y())
-            line = Line(start_point, end_point)
-            self.scene.add_object(line)
-            self.start_pos = None
-            self.current_pos = None
-        elif event.button() == Qt.MouseButton.MiddleButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             self.pan_start_pos = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
