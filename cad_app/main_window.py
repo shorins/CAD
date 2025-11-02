@@ -4,7 +4,7 @@ import sys
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStatusBar, 
                                QToolBar, QLabel, QFileDialog)
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QActionGroup
 from PySide6.QtCore import Qt
 
 from .core.scene import Scene
@@ -27,8 +27,8 @@ class MainWindow(QMainWindow):
         self._create_actions()
         
         # Создаем Представление/Контроллер и передаем ему Модель
-        # Теперь line_tool_action уже определен
-        self.canvas = CanvasWidget(self.scene, self.line_tool_action)
+        # Теперь line_tool_action и delete_tool_action уже определены
+        self.canvas = CanvasWidget(self.scene, self.line_tool_action, self.delete_tool_action)
         self.setCentralWidget(self.canvas)
 
         self._create_menus()
@@ -49,6 +49,9 @@ class MainWindow(QMainWindow):
         self.line_tool_action = QAction(QIcon.fromTheme("draw-path"), "Линия", self)
         self.line_tool_action.setCheckable(True)
         self.line_tool_action.setChecked(True) # Активен по умолчанию
+
+        self.delete_tool_action = QAction(QIcon.fromTheme("edit-delete"), "Удалить", self)
+        self.delete_tool_action.setCheckable(True)
 
         self.settings_action = QAction(QIcon.fromTheme("preferences-system"), "Настройки...", self)
 
@@ -72,8 +75,14 @@ class MainWindow(QMainWindow):
         # Палитра инструментов
         edit_toolbar = QToolBar("Инструменты")
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, edit_toolbar)
+        
+        # Группируем инструменты, чтобы одновременно был активен только один
+        tool_group = QActionGroup(self)
+        tool_group.addAction(self.line_tool_action)
+        tool_group.addAction(self.delete_tool_action)
+        
         edit_toolbar.addAction(self.line_tool_action)
-        # TODO: Добавить другие инструменты и сгруппировать их
+        edit_toolbar.addAction(self.delete_tool_action)
 
     def _create_status_bar(self):
         # Строка состояния

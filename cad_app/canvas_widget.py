@@ -6,18 +6,23 @@ from PySide6.QtCore import Qt, QPointF, Signal
 from .core.scene import Scene
 from .core.geometry import Point, Line
 from .core.algorithms import bresenham
+from .core.math_utils import distance_point_to_segment_sq
 from .settings import settings
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
 
-    def __init__(self, scene: Scene, line_tool_action: QAction, parent=None):
+    def __init__(self, scene: Scene, line_tool_action: QAction, delete_tool_action: QAction, parent=None):
         super().__init__(parent)
         self.scene = scene
         self.scene.scene_changed.connect(self.update)
         settings.settings_changed.connect(self.on_settings_changed)
 
         self.line_tool_action = line_tool_action
+        self.delete_tool_action = delete_tool_action
+        
+        # Сбрасываем выделение при выходе из режима удаления
+        self.delete_tool_action.changed.connect(self._on_delete_tool_changed)
         
         self.setMouseTracking(True)
         self.setAutoFillBackground(True) # Это свойство нужно для setStyleSheet
@@ -29,6 +34,10 @@ class CanvasWidget(QWidget):
         self.pan_start_pos = None
         self.camera_pos = QPointF(0, 0)
         self._initial_center_done = False
+        
+        # Для режима удаления
+        self.highlighted_line = None  # Линия, которая выделена при наведении
+        self.selection_threshold = 10.0  # Пороговое расстояние в пикселях для выделения
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -40,6 +49,14 @@ class CanvasWidget(QWidget):
         self.setStyleSheet(f"background-color: {bg_color};")
         
         self.update() # Запросить полную перерисовку
+    
+    def _on_delete_tool_changed(self):
+        """Обработчик изменения состояния инструмента удаления."""
+        if not self.delete_tool_action.isChecked():
+            # Выходим из режима удаления - сбрасываем выделение
+            self.highlighted_line = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -84,6 +101,11 @@ class CanvasWidget(QWidget):
                 # Отмена рисования правой кнопкой мыши
                 self.start_pos = None
                 self.current_pos = None
+        elif self.delete_tool_action.isChecked():
+            if event.button() == Qt.MouseButton.LeftButton and self.highlighted_line:
+                # Удаляем выделенную линию
+                self.scene.remove_object(self.highlighted_line)
+                self.highlighted_line = None
         elif event.button() == Qt.MouseButton.MiddleButton:
             self.pan_start_pos = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -91,6 +113,23 @@ class CanvasWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         self.cursor_pos_changed.emit(event.position())
+        
+        if self.delete_tool_action.isChecked() and not (event.buttons() & Qt.MouseButton.MiddleButton):
+            # В режиме удаления ищем ближайшую линию
+            self._find_nearest_line(event.position())
+            # Меняем курсор на крестик в режиме удаления
+            if self.highlighted_line:
+                self.setCursor(Qt.CursorShape.PointingHandCursor)  # Рука указывающая
+            else:
+                self.setCursor(Qt.CursorShape.CrossCursor)  # Крестик
+        elif not self.delete_tool_action.isChecked():
+            # Выходим из режима удаления - сбрасываем выделение и курсор
+            if self.highlighted_line is not None:
+                self.highlighted_line = None
+                self.update()
+            if not (event.buttons() & Qt.MouseButton.MiddleButton):
+                self.setCursor(Qt.CursorShape.ArrowCursor)  # Обычная стрелка
+        
         if self.start_pos:
             self.current_pos = event.position()
             self.update()
@@ -110,6 +149,7 @@ class CanvasWidget(QWidget):
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_scene_objects(painter)
+        self._draw_highlighted_line(painter)
         self._draw_preview(painter)
         painter.end()
 
@@ -157,6 +197,10 @@ class CanvasWidget(QWidget):
 
         for obj in self.scene.objects:
             if isinstance(obj, Line):
+                # Пропускаем выделенную линию - она будет отрисована отдельно красным
+                if obj == self.highlighted_line and self.delete_tool_action.isChecked():
+                    continue
+                    
                 start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
                 end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
                 points_generator = bresenham(
@@ -171,3 +215,49 @@ class CanvasWidget(QWidget):
             pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+    
+    def _find_nearest_line(self, cursor_pos: QPointF):
+        """
+        Находит ближайшую линию к курсору и устанавливает её как выделенную.
+        """
+        scene_cursor_pos = self.map_to_scene(cursor_pos)
+        cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
+        
+        nearest_line = None
+        min_distance_sq = self.selection_threshold ** 2  # Квадрат порогового расстояния
+        
+        for obj in self.scene.objects:
+            if isinstance(obj, Line):
+                start_qpoint = QPointF(obj.start.x, obj.start.y)
+                end_qpoint = QPointF(obj.end.x, obj.end.y)
+                
+                # Вычисляем расстояние от курсора до отрезка
+                distance_sq = distance_point_to_segment_sq(cursor_qpoint, start_qpoint, end_qpoint)
+                
+                if distance_sq < min_distance_sq:
+                    min_distance_sq = distance_sq
+                    nearest_line = obj
+        
+        # Обновляем выделенную линию только если она изменилась
+        if nearest_line != self.highlighted_line:
+            self.highlighted_line = nearest_line
+            self.update()
+    
+    def _draw_highlighted_line(self, painter: QPainter):
+        """
+        Отрисовывает выделенную линию красным цветом.
+        """
+        if self.highlighted_line and self.delete_tool_action.isChecked():
+            # Отрисовываем выделенную линию красным цветом
+            pen = QPen(QColor("#FF4444"), 3)  # Красный цвет, немного толще
+            painter.setPen(pen)
+            
+            start_screen = self.map_from_scene(QPointF(self.highlighted_line.start.x, self.highlighted_line.start.y))
+            end_screen = self.map_from_scene(QPointF(self.highlighted_line.end.x, self.highlighted_line.end.y))
+            
+            points_generator = bresenham(
+                int(start_screen.x()), int(start_screen.y()),
+                int(end_screen.x()), int(end_screen.y())
+            )
+            for point in points_generator:
+                painter.drawPoint(*point)
