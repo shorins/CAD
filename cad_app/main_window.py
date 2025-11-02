@@ -117,11 +117,11 @@ class MainWindow(QMainWindow):
     
     def _on_line_tool_toggled(self, checked):
         """Обработчик переключения инструмента 'линия'."""
-        if hasattr(self, 'line_input_panel'):
+        if hasattr(self, 'line_input_toolbar'):
             if checked:
-                self.line_input_panel.show_panel()
+                self.line_input_toolbar.show()
             else:
-                self.line_input_panel.hide_panel()
+                self.line_input_toolbar.hide()
     
     def _on_line_build_requested(self, start_point: Point, end_point: Point):
         """Обработчик запроса на построение линии из панели ввода."""
@@ -155,16 +155,16 @@ class MainWindow(QMainWindow):
         
         # Добавляем панель в нижнюю часть окна (BottomToolBarArea)
         # Используем addToolBar, чтобы панель вела себя как toolbar
-        input_toolbar = QToolBar("Ввод координат")
-        input_toolbar.addWidget(self.line_input_panel)
-        input_toolbar.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, input_toolbar)
+        self.line_input_toolbar = QToolBar("Ввод координат")
+        self.line_input_toolbar.addWidget(self.line_input_panel)
+        self.line_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.line_input_toolbar)
         
         # Показываем панель, если инструмент "линия" активен (он активен по умолчанию)
         if self.line_tool_action.isChecked():
-            self.line_input_panel.show_panel()
+            self.line_input_toolbar.show()
         else:
-            self.line_input_panel.hide_panel()
+            self.line_input_toolbar.hide()
 
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
