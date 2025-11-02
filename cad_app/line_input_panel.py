@@ -322,7 +322,8 @@ class LineInputPanel(QWidget):
             # Отправляем сигнал для построения линии
             self.line_requested.emit(start_point, end_point)
             
-            # Не очищаем поля ввода - пользователь может построить еще одну линию с теми же координатами
+            # Очищаем поля ввода после успешного построения
+            self._clear_inputs()
             
         except (ValueError, KeyError) as e:
             # Игнорируем ошибки валидации
