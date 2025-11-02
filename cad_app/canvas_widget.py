@@ -99,10 +99,24 @@ class CanvasWidget(QWidget):
             super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
+        # Панорамирование недоступно во время построения линии
+        if event.button() == Qt.MouseButton.MiddleButton:
+            # Если идет процесс построения линии, игнорируем панорамирование
+            if self.start_pos is not None:
+                return
+            self.pan_start_pos = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.update()
+            return  # Прерываем выполнение, чтобы не обрабатывать другие события
+        
         if self.line_tool_action.isChecked():
             if event.button() == Qt.MouseButton.LeftButton:
                 if self.start_pos is None:
                     # Первый клик: начинаем рисовать линию
+                    # Сбрасываем панорамирование, если оно было активно
+                    if self.pan_start_pos is not None:
+                        self.pan_start_pos = None
+                        self.setCursor(Qt.CursorShape.ArrowCursor)
                     self.start_pos = event.position()
                     self.current_pos = self.start_pos
                     self._update_line_info()  # Обновляем информацию о линии
@@ -138,15 +152,27 @@ class CanvasWidget(QWidget):
                 # Удаляем выделенную линию
                 self.scene.remove_object(self.highlighted_line)
                 self.highlighted_line = None
-        elif event.button() == Qt.MouseButton.MiddleButton:
-            self.pan_start_pos = event.position()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
         self.update()
 
     def mouseMoveEvent(self, event):
         self.cursor_pos_changed.emit(event.position())
         
-        if self.delete_tool_action.isChecked() and not (event.buttons() & Qt.MouseButton.MiddleButton):
+        # Панорамирование недоступно во время построения линии
+        if self.pan_start_pos and event.buttons() & Qt.MouseButton.MiddleButton:
+            # Если идет процесс построения линии, прерываем панорамирование
+            if self.start_pos is not None:
+                self.pan_start_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                # Панорамирование - перемещаем камеру
+                delta = event.position() - self.pan_start_pos
+                self.camera_pos -= delta
+                self.pan_start_pos = event.position()
+                self.update()
+                return  # Прерываем выполнение, чтобы не обрабатывать другие события
+        
+        # Обработка режима удаления
+        if self.delete_tool_action.isChecked():
             # В режиме удаления ищем ближайшую линию
             self._find_nearest_line(event.position())
             # Меняем курсор на крестик в режиме удаления
@@ -154,22 +180,17 @@ class CanvasWidget(QWidget):
                 self.setCursor(Qt.CursorShape.PointingHandCursor)  # Рука указывающая
             else:
                 self.setCursor(Qt.CursorShape.CrossCursor)  # Крестик
-        elif not self.delete_tool_action.isChecked():
+        else:
             # Выходим из режима удаления - сбрасываем выделение и курсор
             if self.highlighted_line is not None:
                 self.highlighted_line = None
                 self.update()
-            if not (event.buttons() & Qt.MouseButton.MiddleButton):
-                self.setCursor(Qt.CursorShape.ArrowCursor)  # Обычная стрелка
+            self.setCursor(Qt.CursorShape.ArrowCursor)  # Обычная стрелка
         
+        # Обработка построения линии
         if self.start_pos:
             self.current_pos = event.position()
             self._update_line_info()  # Обновляем информацию о линии при движении
-            self.update()
-        elif self.pan_start_pos and event.buttons() & Qt.MouseButton.MiddleButton:
-            delta = event.position() - self.pan_start_pos
-            self.camera_pos -= delta
-            self.pan_start_pos = event.position()
             self.update()
 
     def mouseReleaseEvent(self, event):
