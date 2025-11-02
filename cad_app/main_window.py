@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         
         # Связываем сигнал из Canvas с методом в StatusBar
         self.canvas.cursor_pos_changed.connect(self.update_cursor_pos_label)
+        self.canvas.line_info_changed.connect(self.update_line_info_label)
 
     def _create_actions(self):
         # Используем стандартные иконки Qt для простоты
@@ -52,6 +53,12 @@ class MainWindow(QMainWindow):
 
         self.delete_tool_action = QAction(QIcon.fromTheme("edit-delete"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
+
+        # Кнопка переключения режима построения линии (θ - полярные координаты)
+        self.polar_mode_action = QAction("θ", self)
+        self.polar_mode_action.setCheckable(True)
+        self.polar_mode_action.setToolTip("Полярные координаты (активировано: полярные, неактивировано: декартовы)")
+        self.polar_mode_action.toggled.connect(self._on_polar_mode_toggled)
 
         self.settings_action = QAction(QIcon.fromTheme("preferences-system"), "Настройки...", self)
 
@@ -83,6 +90,25 @@ class MainWindow(QMainWindow):
         
         edit_toolbar.addAction(self.line_tool_action)
         edit_toolbar.addAction(self.delete_tool_action)
+        
+        # Переключатель режима построения линии
+        edit_toolbar.addSeparator()
+        edit_toolbar.addAction(self.polar_mode_action)
+        
+        # Загружаем текущий режим из настроек
+        current_mode = settings.get("line_construction_mode") or "cartesian"
+        # Если режим полярный, кнопка должна быть активирована
+        self.polar_mode_action.setChecked(current_mode == "polar")
+        
+    def _on_polar_mode_toggled(self, checked):
+        """Обработчик переключения режима построения линии."""
+        # checked = True -> полярные координаты
+        # checked = False -> декартовы координаты
+        mode = "polar" if checked else "cartesian"
+        settings.set("line_construction_mode", mode)
+        # Уведомляем canvas о изменении режима
+        if hasattr(self, 'canvas'):
+            self.canvas.on_construction_mode_changed()
 
     def _create_status_bar(self):
         # Строка состояния
@@ -93,13 +119,21 @@ class MainWindow(QMainWindow):
         # Создаем постоянный виджет для отображения координат
         self.cursor_pos_label = QLabel("X: 0.00, Y: 0.00")
         
-        # Добавляем виджет на ПОЛУЧЕННЫЙ объект строки состояния
+        # Создаем виджет для отображения информации о линии (длина, угол)
+        self.line_info_label = QLabel("")
+        
+        # Добавляем виджеты на ПОЛУЧЕННЫЙ объект строки состояния
         status_bar.addPermanentWidget(self.cursor_pos_label)
+        status_bar.addPermanentWidget(self.line_info_label)
 
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
         scene_pos = self.canvas.map_to_scene(pos)
         self.cursor_pos_label.setText(f"X: {scene_pos.x():.2f}, Y: {scene_pos.y():.2f}")
+    
+    def update_line_info_label(self, info_text):
+        # Слот, который обновляет информацию о линии
+        self.line_info_label.setText(info_text)
 
     def new_project(self):
         """Очищает сцену и сбрасывает настройки для создания нового проекта."""

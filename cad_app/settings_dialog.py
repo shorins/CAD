@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QSpinBox, 
-                               QPushButton, QDialogButtonBox, QColorDialog, QLabel)
+                               QPushButton, QDialogButtonBox, QColorDialog, QLabel, QComboBox)
 from PySide6.QtGui import QColor
 from .settings import settings
 
@@ -36,7 +36,13 @@ class SettingsDialog(QDialog):
         self.grid_step_input.setRange(10, 500)
         form_layout.addRow("Шаг сетки (пиксели):", self.grid_step_input)
 
-        # 2. Настройка цветов
+        # 2. Настройка единиц измерения углов
+        self.angle_units_combo = QComboBox()
+        self.angle_units_combo.addItem("Градусы (°)", "degrees")
+        self.angle_units_combo.addItem("Радианы (rad)", "radians")
+        form_layout.addRow("Единицы измерения углов:", self.angle_units_combo)
+
+        # 3. Настройка цветов
         form_layout.addRow(QLabel("<b>Цвета:</b>"))
         self.canvas_bg_picker = ColorPickerButton("#000000")
         self.grid_minor_picker = ColorPickerButton("#000000")
@@ -68,6 +74,12 @@ class SettingsDialog(QDialog):
         grid_step = settings.get("grid_step") or settings.defaults["grid_step"]
         self.grid_step_input.setValue(grid_step)
         
+        # Загружаем единицы измерения углов
+        angle_units = settings.get("angle_units") or settings.defaults["angle_units"]
+        index = self.angle_units_combo.findData(angle_units)
+        if index >= 0:
+            self.angle_units_combo.setCurrentIndex(index)
+        
         colors = settings.get("colors") or settings.defaults["colors"]
         self.canvas_bg_picker.set_color(colors.get("canvas_bg", "#000000"))
         self.grid_minor_picker.set_color(colors.get("grid_minor", "#000000"))
@@ -78,6 +90,13 @@ class SettingsDialog(QDialog):
         """Сбрасывает настройки в UI к значениям по умолчанию."""
         # Мы не меняем глобальный объект settings, а только отображение в окне
         self.grid_step_input.setValue(settings.defaults["grid_step"])
+        
+        # Сбрасываем единицы измерения углов
+        angle_units = settings.defaults["angle_units"]
+        index = self.angle_units_combo.findData(angle_units)
+        if index >= 0:
+            self.angle_units_combo.setCurrentIndex(index)
+        
         colors = settings.defaults["colors"]
         self.canvas_bg_picker.set_color(colors["canvas_bg"])
         self.grid_minor_picker.set_color(colors["grid_minor"])
@@ -87,6 +106,11 @@ class SettingsDialog(QDialog):
     def accept(self):
         """Применяет и сохраняет настройки."""
         settings.set("grid_step", self.grid_step_input.value())
+        
+        # Сохраняем единицы измерения углов
+        angle_units = self.angle_units_combo.currentData()
+        settings.set("angle_units", angle_units)
+        
         colors = {
             "canvas_bg": self.canvas_bg_picker.color.name(QColor.NameFormat.HexArgb),
             "grid_minor": self.grid_minor_picker.color.name(QColor.NameFormat.HexArgb),

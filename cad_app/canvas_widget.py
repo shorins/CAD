@@ -6,11 +6,14 @@ from PySide6.QtCore import Qt, QPointF, Signal
 from .core.scene import Scene
 from .core.geometry import Point, Line
 from .core.algorithms import bresenham
-from .core.math_utils import distance_point_to_segment_sq
+from .core.math_utils import (distance_point_to_segment_sq, get_distance, 
+                             cartesian_to_polar, get_angle_between_points,
+                             radians_to_degrees, degrees_to_radians, polar_to_cartesian)
 from .settings import settings
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
+    line_info_changed = Signal(str)  # Сигнал для передачи информации о линии
 
     def __init__(self, scene: Scene, line_tool_action: QAction, delete_tool_action: QAction, parent=None):
         super().__init__(parent)
@@ -27,8 +30,7 @@ class CanvasWidget(QWidget):
         self.setMouseTracking(True)
         self.setAutoFillBackground(True) # Это свойство нужно для setStyleSheet
         
-        self.on_settings_changed() # Вызываем при старте, чтобы установить фон
-
+        # Инициализируем переменные до вызова on_settings_changed
         self.start_pos = None
         self.current_pos = None
         self.pan_start_pos = None
@@ -38,6 +40,11 @@ class CanvasWidget(QWidget):
         # Для режима удаления
         self.highlighted_line = None  # Линия, которая выделена при наведении
         self.selection_threshold = 10.0  # Пороговое расстояние в пикселях для выделения
+        
+        # Для режима построения линии
+        self._current_construction_mode = settings.get("line_construction_mode") or "cartesian"
+        
+        self.on_settings_changed() # Вызываем при старте, чтобы установить фон
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -48,6 +55,10 @@ class CanvasWidget(QWidget):
         # Устанавливаем фон через прямое указание стиля. Это надежнее.
         self.setStyleSheet(f"background-color: {bg_color};")
         
+        # Обновляем информацию о линии при изменении настроек (например, единиц углов)
+        if self.start_pos and self.current_pos:
+            self._update_line_info()
+        
         self.update() # Запросить полную перерисовку
     
     def _on_delete_tool_changed(self):
@@ -57,6 +68,13 @@ class CanvasWidget(QWidget):
             self.highlighted_line = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
+    
+    def on_construction_mode_changed(self):
+        """Обработчик изменения режима построения."""
+        self._current_construction_mode = settings.get("line_construction_mode") or "cartesian"
+        # Если мы в процессе построения линии, обновляем информацию
+        if self.start_pos:
+            self._update_line_info()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -87,20 +105,34 @@ class CanvasWidget(QWidget):
                     # Первый клик: начинаем рисовать линию
                     self.start_pos = event.position()
                     self.current_pos = self.start_pos
+                    self._update_line_info()  # Обновляем информацию о линии
                 else:
                     # Второй клик: завершаем линию
                     start_scene_pos = self.map_to_scene(self.start_pos)
-                    end_scene_pos = self.map_to_scene(event.position())
+                    
+                    if self._current_construction_mode == "polar":
+                        # В полярном режиме используем текущую позицию курсора для вычисления полярных координат
+                        # Используем self.current_pos если оно есть, иначе event.position()
+                        cursor_pos = self.current_pos if self.current_pos else event.position()
+                        current_scene_pos = self.map_to_scene(cursor_pos)
+                        end_point_qpoint = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
+                        end_point = Point(end_point_qpoint.x(), end_point_qpoint.y())
+                    else:
+                        # В декартовом режиме используем позицию клика напрямую
+                        end_scene_pos = self.map_to_scene(event.position())
+                        end_point = Point(end_scene_pos.x(), end_scene_pos.y())
+                    
                     start_point = Point(start_scene_pos.x(), start_scene_pos.y())
-                    end_point = Point(end_scene_pos.x(), end_scene_pos.y())
                     line = Line(start_point, end_point)
                     self.scene.add_object(line)
                     self.start_pos = None
                     self.current_pos = None
+                    self.line_info_changed.emit("")  # Очищаем информацию
             elif event.button() == Qt.MouseButton.RightButton and self.start_pos:
                 # Отмена рисования правой кнопкой мыши
                 self.start_pos = None
                 self.current_pos = None
+                self.line_info_changed.emit("")  # Очищаем информацию
         elif self.delete_tool_action.isChecked():
             if event.button() == Qt.MouseButton.LeftButton and self.highlighted_line:
                 # Удаляем выделенную линию
@@ -132,6 +164,7 @@ class CanvasWidget(QWidget):
         
         if self.start_pos:
             self.current_pos = event.position()
+            self._update_line_info()  # Обновляем информацию о линии при движении
             self.update()
         elif self.pan_start_pos and event.buttons() & Qt.MouseButton.MiddleButton:
             delta = event.position() - self.pan_start_pos
@@ -214,7 +247,72 @@ class CanvasWidget(QWidget):
         if self.start_pos and self.current_pos:
             pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.DashLine)
             painter.setPen(pen)
-            painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+            
+            if self._current_construction_mode == "polar":
+                # В полярном режиме вычисляем конечную точку из полярных координат
+                start_scene_pos = self.map_to_scene(self.start_pos)
+                current_scene_pos = self.map_to_scene(self.current_pos)
+                end_point = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
+                end_screen = self.map_from_scene(end_point)
+                painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
+            else:
+                # В декартовом режиме рисуем прямую линию
+                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+    
+    def _calculate_end_point_polar(self, start_scene: QPointF, cursor_scene: QPointF) -> QPointF:
+        """
+        Вычисляет конечную точку линии в полярных координатах.
+        Использует полярные координаты курсора относительно начальной точки.
+        """
+        # Вычисляем полярные координаты курсора относительно начальной точки
+        r, theta = cartesian_to_polar(start_scene, cursor_scene)
+        
+        # Конвертируем обратно в декартовы координаты для построения линии
+        end_point = polar_to_cartesian(start_scene, r, theta)
+        return end_point
+    
+    def _update_line_info(self):
+        """Обновляет информацию о линии в статус-баре."""
+        if not self.start_pos or not self.current_pos:
+            self.line_info_changed.emit("")
+            return
+        
+        start_scene_pos = self.map_to_scene(self.start_pos)
+        current_scene_pos = self.map_to_scene(self.current_pos)
+        
+        # Вычисляем расстояние (длину линии)
+        length = get_distance(start_scene_pos, current_scene_pos)
+        
+        # Вычисляем угол
+        angle_rad = get_angle_between_points(start_scene_pos, current_scene_pos)
+        
+        # Получаем единицы измерения углов из настроек
+        angle_units = settings.get("angle_units") or "degrees"
+        
+        if self._current_construction_mode == "polar":
+            # В полярном режиме показываем полярные координаты
+            r, theta = cartesian_to_polar(start_scene_pos, current_scene_pos)
+            
+            if angle_units == "degrees":
+                angle_display = radians_to_degrees(theta)
+                angle_unit_str = "°"
+            else:
+                angle_display = theta
+                angle_unit_str = " rad"
+            
+            info = f"r: {r:.2f}, θ: {angle_display:.2f}{angle_unit_str} | Длина: {length:.2f}"
+        else:
+            # В декартовом режиме показываем декартовы координаты и угол
+            if angle_units == "degrees":
+                angle_display = radians_to_degrees(angle_rad)
+                angle_unit_str = "°"
+            else:
+                angle_display = angle_rad
+                angle_unit_str = " rad"
+            
+            info = f"Длина: {length:.2f} | Угол: {angle_display:.2f}{angle_unit_str}"
+        
+        self.line_info_changed.emit(info)
     
     def _find_nearest_line(self, cursor_pos: QPointF):
         """

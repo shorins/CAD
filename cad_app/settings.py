@@ -9,6 +9,8 @@ class AppSettings(QObject):
         super().__init__()
         self.defaults = {
             "grid_step": 50,
+            "line_construction_mode": "cartesian",  # "cartesian" или "polar"
+            "angle_units": "degrees",  # "degrees" или "radians"
             "colors": {
                 "canvas_bg": "#2D2D2D",
                 "grid_minor": "#1EFFFFFF",
