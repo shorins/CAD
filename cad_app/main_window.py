@@ -4,8 +4,9 @@ import sys
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStatusBar, 
                                QToolBar, QLabel, QFileDialog)
-from PySide6.QtGui import QAction, QIcon, QActionGroup
+from PySide6.QtGui import QAction, QIcon, QActionGroup, QPixmap, QPainter
 from PySide6.QtCore import Qt
+from PySide6.QtSvg import QSvgRenderer
 
 from .core.scene import Scene
 from .core.geometry import Line, Point
@@ -14,6 +15,33 @@ from .theme import get_stylesheet
 from .settings_dialog import SettingsDialog
 from .settings import settings
 from .line_input_panel import LineInputPanel
+
+
+def load_svg_icon(svg_path, color="#FFFFFF"):
+    """Загружает SVG иконку и перекрашивает её в указанный цвет."""
+    # Читаем SVG файл
+    with open(svg_path, 'r', encoding='utf-8') as f:
+        svg_content = f.read()
+    
+    # Заменяем fill и stroke на нужный цвет
+    # Удаляем существующие атрибуты fill и добавляем свой
+    import re
+    svg_content = re.sub(r'fill="[^"]*"', '', svg_content)
+    svg_content = re.sub(r'stroke="[^"]*"', '', svg_content)
+    
+    # Добавляем fill к path элементам
+    svg_content = svg_content.replace('<path', f'<path fill="{color}"')
+    
+    # Создаем QPixmap из модифицированного SVG
+    renderer = QSvgRenderer(svg_content.encode('utf-8'))
+    pixmap = QPixmap(64, 64)  # Размер иконки
+    pixmap.fill(Qt.GlobalColor.transparent)
+    
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    
+    return QIcon(pixmap)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -48,35 +76,34 @@ class MainWindow(QMainWindow):
         self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
 
     def _create_actions(self):
-        # Используем стандартные иконки Qt для простоты
-        # Для реального проекта лучше использовать SVG-иконки
+        # Используем SVG иконки из папки public с белым цветом
         self.new_action = QAction(QIcon.fromTheme("document-new"), "&Новый", self)
         self.open_action = QAction(QIcon.fromTheme("document-open"), "&Открыть...", self)
         self.save_action = QAction(QIcon.fromTheme("document-save"), "&Сохранить", self)
         self.exit_action = QAction(QIcon.fromTheme("application-exit"), "&Выход", self)
         
-        self.line_tool_action = QAction(QIcon.fromTheme("draw-path"), "Линия", self)
+        self.line_tool_action = QAction(load_svg_icon("public/line.svg"), "Линия", self)
         self.line_tool_action.setCheckable(True)
         self.line_tool_action.setChecked(True) # Активен по умолчанию
 
-        self.delete_tool_action = QAction(QIcon.fromTheme("edit-delete"), "Удалить", self)
+        self.delete_tool_action = QAction(load_svg_icon("public/delete.svg"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
         self.delete_tool_action.triggered.connect(self._on_delete_tool_toggled)
 
         # Pan tool action
-        self.pan_tool_action = QAction(QIcon.fromTheme("transform-move"), "Рука", self)
+        self.pan_tool_action = QAction(load_svg_icon("public/move.svg"), "Рука", self)
         self.pan_tool_action.setToolTip("Инструмент панорамирования (H)")
         self.pan_tool_action.setShortcut("H")
         self.pan_tool_action.setCheckable(True)
         self.pan_tool_action.triggered.connect(self._on_pan_tool_toggled)
 
-        # Кнопка zoom to fit
+        # Кнопка zoom to fit - оставляем стандартную иконку
         self.zoom_fit_action = QAction(QIcon.fromTheme("zoom-fit-best"), "По размеру", self)
         self.zoom_fit_action.setToolTip("Показать все объекты (Ctrl+0)")
         self.zoom_fit_action.setShortcut("Ctrl+0")
 
         # Кнопка переключения режима построения линии (θ - полярные координаты)
-        self.polar_mode_action = QAction("θ", self)
+        self.polar_mode_action = QAction(load_svg_icon("public/polar.svg"), "θ", self)
         self.polar_mode_action.setCheckable(True)
         self.polar_mode_action.setToolTip("Полярные координаты (активировано: полярные, неактивировано: декартовы)")
         self.polar_mode_action.toggled.connect(self._on_polar_mode_toggled)
