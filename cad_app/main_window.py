@@ -45,6 +45,18 @@ class MainWindow(QMainWindow):
         self.canvas.cursor_pos_changed.connect(self.update_cursor_pos_label)
         self.canvas.line_info_changed.connect(self.update_line_info_label)
         
+        # Подключаем сигналы для обновления масштаба и поворота
+        self.canvas.zoom_changed.connect(self.update_zoom_label)
+        self.canvas.rotation_changed.connect(self.update_rotation_label)
+        
+        # Подключаем сигналы для обновления метки инструмента
+        self.line_tool_action.toggled.connect(self._update_tool_label)
+        self.delete_tool_action.toggled.connect(self._update_tool_label)
+        self.pan_tool_action.toggled.connect(self._update_tool_label)
+        
+        # Устанавливаем начальное значение метки инструмента
+        self._update_tool_label()
+        
         # Связываем выбор инструмента "линия" с показом/скрытием панели ввода
         self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
 
@@ -217,9 +229,17 @@ class MainWindow(QMainWindow):
         # Создаем виджет для отображения информации о линии (длина, угол)
         self.line_info_label = QLabel("")
         
+        # Создаем новые виджеты для отображения масштаба, поворота и инструмента
+        self.zoom_label = QLabel("Масштаб: 100%")
+        self.rotation_label = QLabel("Поворот: 0°")
+        self.tool_label = QLabel("Инструмент: Линия")
+        
         # Добавляем виджеты на ПОЛУЧЕННЫЙ объект строки состояния
         status_bar.addPermanentWidget(self.cursor_pos_label)
         status_bar.addPermanentWidget(self.line_info_label)
+        status_bar.addPermanentWidget(self.zoom_label)
+        status_bar.addPermanentWidget(self.rotation_label)
+        status_bar.addPermanentWidget(self.tool_label)
     
     def _create_line_input_panel(self):
         """Создает панель ввода координат для линии."""
@@ -251,6 +271,27 @@ class MainWindow(QMainWindow):
     def update_line_info_label(self, info_text):
         # Слот, который обновляет информацию о линии
         self.line_info_label.setText(info_text)
+    
+    def update_zoom_label(self, zoom_factor: float):
+        """Обновляет метку масштаба."""
+        zoom_percent = int(zoom_factor * 100)
+        self.zoom_label.setText(f"Масштаб: {zoom_percent}%")
+    
+    def update_rotation_label(self, rotation_angle: float):
+        """Обновляет метку угла поворота."""
+        # Инвертируем угол для отображения (360 - angle), чтобы соответствовать визуальному направлению
+        # При повороте по часовой стрелке угол увеличивается: 0 -> 90 -> 180 -> 270
+        display_angle = (360 - int(rotation_angle)) % 360
+        self.rotation_label.setText(f"Поворот: {display_angle}°")
+    
+    def _update_tool_label(self):
+        """Обновляет метку активного инструмента."""
+        if self.line_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Линия")
+        elif self.delete_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Удаление")
+        elif self.pan_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Панорамирование")
 
     def new_project(self):
         """Очищает сцену и сбрасывает настройки для создания нового проекта."""

@@ -15,6 +15,8 @@ from .icon_utils import load_svg_icon
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
     line_info_changed = Signal(str)  # Сигнал для передачи информации о линии
+    zoom_changed = Signal(float)  # Сигнал для передачи текущего zoom_factor
+    rotation_changed = Signal(float)  # Сигнал для передачи текущего rotation_angle
 
     def __init__(self, scene: Scene, line_tool_action: QAction, delete_tool_action: QAction, parent=None):
         super().__init__(parent)
@@ -92,6 +94,10 @@ class CanvasWidget(QWidget):
         self.pan_start_camera = None  # Начальная позиция камеры при начале панорамирования
         
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
+        
+        # Отправляем начальные значения zoom и rotation
+        self.zoom_changed.emit(self.zoom_factor)
+        self.rotation_changed.emit(self.rotation_angle)
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -246,6 +252,7 @@ class CanvasWidget(QWidget):
         if abs(self.zoom_factor - self.target_zoom_factor) < 0.001:
             self.zoom_factor = self.target_zoom_factor
             self.zoom_animation_timer.stop()
+            self.zoom_changed.emit(self.zoom_factor)
             self.update()
             return
         
@@ -263,6 +270,7 @@ class CanvasWidget(QWidget):
             delta = after_zoom_scene_pos - before_zoom_scene_pos
             self.camera_pos -= delta
         
+        self.zoom_changed.emit(self.zoom_factor)
         self.update()
     
     def _apply_rotation(self, clockwise: bool):
@@ -355,6 +363,9 @@ class CanvasWidget(QWidget):
             self.rotation_angle = self.target_rotation_angle
             self.is_rotating = False
             self.rotation_animation_timer.stop()
+        
+        # Отправляем сигнал об изменении угла поворота
+        self.rotation_changed.emit(self.rotation_angle)
         
         # Перерисовываем холст
         self.update()
@@ -1019,6 +1030,9 @@ class CanvasWidget(QWidget):
         # Запускаем анимацию zoom
         if not self.zoom_animation_timer.isActive():
             self.zoom_animation_timer.start()
+        
+        # Отправляем сигнал об изменении zoom (будет обновляться во время анимации)
+        self.zoom_changed.emit(self.target_zoom_factor)
     
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         """
@@ -1191,4 +1205,9 @@ class CanvasWidget(QWidget):
         self.zoom_factor = state.get("zoom_factor", 1.0)
         self.target_zoom_factor = self.zoom_factor  # Синхронизируем target с текущим значением
         self.rotation_angle = state.get("rotation_angle", 0.0)
+        
+        # Отправляем сигналы об изменении zoom и rotation
+        self.zoom_changed.emit(self.zoom_factor)
+        self.rotation_changed.emit(self.rotation_angle)
+        
         self.update()
