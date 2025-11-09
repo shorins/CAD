@@ -978,6 +978,7 @@ class CanvasWidget(QWidget):
         """
         Автоматически масштабирует и центрирует вид для отображения всех объектов.
         Добавляет 10% padding вокруг bounding box.
+        Учитывает текущий поворот вида при вычислении zoom.
         """
         bounds = self._calculate_scene_bounds()
         
@@ -991,7 +992,7 @@ class CanvasWidget(QWidget):
         
         min_point, max_point = bounds
         
-        # Вычисляем размеры bounding box
+        # Вычисляем размеры bounding box в сценовых координатах
         bbox_width = max_point.x() - min_point.x()
         bbox_height = max_point.y() - min_point.y()
         
@@ -1006,10 +1007,22 @@ class CanvasWidget(QWidget):
         if bbox_height < 0.01:
             bbox_height = 10.0
         
+        # Вычисляем эффективные размеры экрана в сценовых координатах с учетом поворота
+        # При повороте на 90° или 270° ширина и высота экрана меняются местами
+        angle_rad = math.radians(self.rotation_angle)
+        cos_angle = abs(math.cos(angle_rad))
+        sin_angle = abs(math.sin(angle_rad))
+        
+        # Эффективная ширина и высота экрана в сценовых координатах
+        # Используем формулу для вращающегося прямоугольника:
+        # effective_width = width * |cos(angle)| + height * |sin(angle)|
+        # effective_height = width * |sin(angle)| + height * |cos(angle)|
+        effective_screen_width = self.width() * cos_angle + self.height() * sin_angle
+        effective_screen_height = self.width() * sin_angle + self.height() * cos_angle
+        
         # Вычисляем необходимый zoom для вмещения bbox
-        # Учитываем, что нужно вместить и по ширине, и по высоте
-        zoom_x = self.width() / bbox_width if bbox_width > 0 else 1.0
-        zoom_y = self.height() / bbox_height if bbox_height > 0 else 1.0
+        zoom_x = effective_screen_width / bbox_width
+        zoom_y = effective_screen_height / bbox_height
         
         # Выбираем меньший zoom, чтобы все поместилось
         new_zoom = min(zoom_x, zoom_y)
