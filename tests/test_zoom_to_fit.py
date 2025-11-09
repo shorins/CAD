@@ -3,12 +3,13 @@
 """
 import sys
 import math
+import os
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QPointF
 from PySide6.QtGui import QAction
 
-# Добавляем путь к модулю cad_app
-sys.path.insert(0, '..')
+# Добавляем путь к корневой директории проекта
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from cad_app.core.scene import Scene
 from cad_app.core.geometry import Point, Line
@@ -159,16 +160,210 @@ def test_zoom_to_fit_multiple_lines():
     print("✓ test_zoom_to_fit_multiple_lines passed")
 
 
+def test_zoom_to_fit_with_rotation_0():
+    """Тест zoom to fit с поворотом 0° (без поворота)."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+    canvas.resize(800, 600)
+    
+    # Добавляем горизонтальную линию
+    line = Line(Point(0, 0), Point(100, 0))
+    scene.add_object(line)
+    
+    # Устанавливаем поворот 0°
+    canvas.rotation_angle = 0.0
+    
+    # Вызываем zoom_to_fit
+    canvas.zoom_to_fit()
+    
+    # Сохраняем zoom для сравнения
+    zoom_0 = canvas.target_zoom_factor
+    
+    # Проверяем, что zoom был установлен
+    assert zoom_0 > 0, "target_zoom_factor должен быть положительным"
+    print(f"✓ test_zoom_to_fit_with_rotation_0 passed (zoom={zoom_0:.2f})")
+
+
+def test_zoom_to_fit_with_rotation_90():
+    """Тест zoom to fit с поворотом 90°."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+    canvas.resize(800, 600)
+    
+    # Добавляем горизонтальную линию
+    line = Line(Point(0, 0), Point(100, 0))
+    scene.add_object(line)
+    
+    # Устанавливаем поворот 90°
+    canvas.rotation_angle = 90.0
+    
+    # Вызываем zoom_to_fit
+    canvas.zoom_to_fit()
+    
+    # Сохраняем zoom для сравнения
+    zoom_90 = canvas.target_zoom_factor
+    
+    # Проверяем, что zoom был установлен
+    assert zoom_90 > 0, "target_zoom_factor должен быть положительным"
+    
+    # При повороте на 90° горизонтальная линия становится вертикальной
+    # Поэтому zoom должен учитывать высоту экрана вместо ширины
+    print(f"✓ test_zoom_to_fit_with_rotation_90 passed (zoom={zoom_90:.2f})")
+
+
+def test_zoom_to_fit_with_rotation_180():
+    """Тест zoom to fit с поворотом 180°."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+    canvas.resize(800, 600)
+    
+    # Добавляем горизонтальную линию
+    line = Line(Point(0, 0), Point(100, 0))
+    scene.add_object(line)
+    
+    # Устанавливаем поворот 180°
+    canvas.rotation_angle = 180.0
+    
+    # Вызываем zoom_to_fit
+    canvas.zoom_to_fit()
+    
+    # Сохраняем zoom для сравнения
+    zoom_180 = canvas.target_zoom_factor
+    
+    # Проверяем, что zoom был установлен
+    assert zoom_180 > 0, "target_zoom_factor должен быть положительным"
+    
+    # При повороте на 180° размеры экрана не меняются (как при 0°)
+    print(f"✓ test_zoom_to_fit_with_rotation_180 passed (zoom={zoom_180:.2f})")
+
+
+def test_zoom_to_fit_with_rotation_270():
+    """Тест zoom to fit с поворотом 270°."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+    canvas.resize(800, 600)
+    
+    # Добавляем горизонтальную линию
+    line = Line(Point(0, 0), Point(100, 0))
+    scene.add_object(line)
+    
+    # Устанавливаем поворот 270°
+    canvas.rotation_angle = 270.0
+    
+    # Вызываем zoom_to_fit
+    canvas.zoom_to_fit()
+    
+    # Сохраняем zoom для сравнения
+    zoom_270 = canvas.target_zoom_factor
+    
+    # Проверяем, что zoom был установлен
+    assert zoom_270 > 0, "target_zoom_factor должен быть положительным"
+    
+    # При повороте на 270° горизонтальная линия становится вертикальной (как при 90°)
+    print(f"✓ test_zoom_to_fit_with_rotation_270 passed (zoom={zoom_270:.2f})")
+
+
+def test_zoom_to_fit_rotation_consistency():
+    """Тест согласованности zoom to fit при разных поворотах."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+    canvas.resize(800, 600)
+    
+    # Добавляем квадратную область (линии образуют квадрат)
+    line1 = Line(Point(0, 0), Point(100, 0))
+    line2 = Line(Point(100, 0), Point(100, 100))
+    line3 = Line(Point(100, 100), Point(0, 100))
+    line4 = Line(Point(0, 100), Point(0, 0))
+    
+    scene.add_object(line1)
+    scene.add_object(line2)
+    scene.add_object(line3)
+    scene.add_object(line4)
+    
+    # Тестируем zoom для квадрата при разных поворотах
+    zooms = {}
+    for angle in [0, 90, 180, 270]:
+        canvas.rotation_angle = float(angle)
+        canvas.zoom_to_fit()
+        zooms[angle] = canvas.target_zoom_factor
+    
+    # Для квадрата zoom должен быть примерно одинаковым при всех поворотах
+    # (с небольшой погрешностью из-за округления)
+    zoom_values = list(zooms.values())
+    max_zoom = max(zoom_values)
+    min_zoom = min(zoom_values)
+    
+    # Разница не должна превышать 10%
+    tolerance = 0.1
+    assert (max_zoom - min_zoom) / max_zoom < tolerance, \
+        f"Zoom для квадрата должен быть примерно одинаковым при всех поворотах: {zooms}"
+    
+    print(f"✓ test_zoom_to_fit_rotation_consistency passed (zooms={zooms})")
+
+
+def test_zoom_to_fit_rotation_effective_dimensions():
+    """Тест эффективных размеров экрана при повороте."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+    canvas.resize(800, 600)  # Ширина > Высота
+    
+    # Добавляем горизонтальную линию (длинная по X)
+    line = Line(Point(0, 0), Point(200, 0))
+    scene.add_object(line)
+    
+    # Тест 1: При 0° горизонтальная линия использует ширину экрана
+    canvas.rotation_angle = 0.0
+    canvas.zoom_to_fit()
+    zoom_0 = canvas.target_zoom_factor
+    
+    # Тест 2: При 90° горизонтальная линия становится вертикальной и использует высоту экрана
+    canvas.rotation_angle = 90.0
+    canvas.zoom_to_fit()
+    zoom_90 = canvas.target_zoom_factor
+    
+    # При повороте на 90° zoom должен быть меньше (т.к. высота < ширины)
+    # Это означает, что алгоритм правильно учитывает поворот
+    assert zoom_90 < zoom_0, \
+        f"При повороте на 90° zoom должен быть меньше для горизонтальной линии: zoom_0={zoom_0:.2f}, zoom_90={zoom_90:.2f}"
+    
+    print(f"✓ test_zoom_to_fit_rotation_effective_dimensions passed (zoom_0={zoom_0:.2f}, zoom_90={zoom_90:.2f})")
+
+
 if __name__ == "__main__":
     print("Запуск тестов zoom to fit...")
     print()
     
+    # Базовые тесты
     test_calculate_scene_bounds_empty()
     test_calculate_scene_bounds_single_line()
     test_calculate_scene_bounds_multiple_lines()
     test_zoom_to_fit_empty_scene()
     test_zoom_to_fit_single_line()
     test_zoom_to_fit_multiple_lines()
+    
+    print()
+    print("Тесты с поворотом вида:")
+    print()
+    
+    # Тесты с поворотом
+    test_zoom_to_fit_with_rotation_0()
+    test_zoom_to_fit_with_rotation_90()
+    test_zoom_to_fit_with_rotation_180()
+    test_zoom_to_fit_with_rotation_270()
+    test_zoom_to_fit_rotation_consistency()
+    test_zoom_to_fit_rotation_effective_dimensions()
     
     print()
     print("Все тесты пройдены успешно! ✓")
