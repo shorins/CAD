@@ -61,6 +61,14 @@ class MainWindow(QMainWindow):
 
         self.delete_tool_action = QAction(QIcon.fromTheme("edit-delete"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
+        self.delete_tool_action.triggered.connect(self._on_delete_tool_toggled)
+
+        # Pan tool action
+        self.pan_tool_action = QAction(QIcon.fromTheme("transform-move"), "Рука", self)
+        self.pan_tool_action.setToolTip("Инструмент панорамирования (H)")
+        self.pan_tool_action.setShortcut("H")
+        self.pan_tool_action.setCheckable(True)
+        self.pan_tool_action.triggered.connect(self._on_pan_tool_toggled)
 
         # Кнопка zoom to fit
         self.zoom_fit_action = QAction(QIcon.fromTheme("zoom-fit-best"), "По размеру", self)
@@ -101,9 +109,11 @@ class MainWindow(QMainWindow):
         tool_group = QActionGroup(self)
         tool_group.addAction(self.line_tool_action)
         tool_group.addAction(self.delete_tool_action)
+        tool_group.addAction(self.pan_tool_action)
         
         edit_toolbar.addAction(self.line_tool_action)
         edit_toolbar.addAction(self.delete_tool_action)
+        edit_toolbar.addAction(self.pan_tool_action)
         
         # Zoom to fit
         edit_toolbar.addSeparator()
@@ -128,13 +138,44 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'canvas'):
             self.canvas.on_construction_mode_changed()
     
+    def _deactivate_all_tools(self):
+        """Деактивирует все инструменты."""
+        self.line_tool_action.setChecked(False)
+        self.delete_tool_action.setChecked(False)
+        self.pan_tool_action.setChecked(False)
+        self.canvas.set_pan_tool_active(False)
+    
     def _on_line_tool_toggled(self, checked):
         """Обработчик переключения инструмента 'линия'."""
+        if checked:
+            # Деактивируем другие инструменты
+            self.delete_tool_action.setChecked(False)
+            self.pan_tool_action.setChecked(False)
+            self.canvas.set_pan_tool_active(False)
+        
         if hasattr(self, 'line_input_toolbar'):
             if checked:
                 self.line_input_toolbar.show()
             else:
                 self.line_input_toolbar.hide()
+    
+    def _on_delete_tool_toggled(self, checked):
+        """Обработчик переключения инструмента удаления."""
+        if checked:
+            # Деактивируем другие инструменты
+            self.line_tool_action.setChecked(False)
+            self.pan_tool_action.setChecked(False)
+            self.canvas.set_pan_tool_active(False)
+    
+    def _on_pan_tool_toggled(self, checked):
+        """Обрабатывает переключение инструмента панорамирования."""
+        if checked:
+            # Деактивируем другие инструменты
+            self.line_tool_action.setChecked(False)
+            self.delete_tool_action.setChecked(False)
+        
+        # Активируем/деактивируем pan tool в canvas
+        self.canvas.set_pan_tool_active(checked)
     
     def _on_line_build_requested(self, start_point: Point, end_point: Point):
         """Обработчик запроса на построение линии из панели ввода."""

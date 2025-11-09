@@ -71,6 +71,12 @@ class CanvasWidget(QWidget):
         self.rotation_indicator_timer.setSingleShot(True)  # Одноразовый таймер
         self.rotation_indicator_timer.timeout.connect(self._hide_rotation_indicator)
         
+        # Pan tool state variables
+        self.pan_tool_active = False  # Флаг активности инструмента панорамирования
+        self.is_panning = False  # Флаг активного панорамирования (зажата кнопка мыши)
+        self.pan_start_pos = None  # Начальная позиция мыши при начале панорамирования
+        self.pan_start_camera = None  # Начальная позиция камеры при начале панорамирования
+        
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
 
     def on_settings_changed(self):
@@ -273,9 +279,37 @@ class CanvasWidget(QWidget):
         """Скрывает индикатор поворота после таймаута."""
         self.show_rotation_indicator = False
         self.update()
+    
+    def set_pan_tool_active(self, active: bool):
+        """
+        Активирует или деактивирует инструмент панорамирования.
+        
+        Args:
+            active: True для активации, False для деактивации
+        """
+        self.pan_tool_active = active
+        
+        if active:
+            # Устанавливаем курсор открытой руки
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            # Восстанавливаем обычный курсор
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            # Сбрасываем состояние панорамирования
+            self.is_panning = False
+            self.pan_start_pos = None
+            self.pan_start_camera = None
 
     def mousePressEvent(self, event):
-        # Панорамирование недоступно во время построения линии
+        # Обработка pan tool с левой кнопкой мыши
+        if self.pan_tool_active and event.button() == Qt.MouseButton.LeftButton:
+            self.is_panning = True
+            self.pan_start_pos = event.position()
+            self.pan_start_camera = QPointF(self.camera_pos.x(), self.camera_pos.y())
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+        
+        # Панорамирование средней кнопкой недоступно во время построения линии
         if event.button() == Qt.MouseButton.MiddleButton:
             # Если идет процесс построения линии, игнорируем панорамирование
             if self.start_pos is not None:
@@ -333,7 +367,34 @@ class CanvasWidget(QWidget):
     def mouseMoveEvent(self, event):
         self.cursor_pos_changed.emit(event.position())
         
-        # Панорамирование недоступно во время построения линии
+        # Обработка панорамирования с pan tool (левая кнопка)
+        if self.is_panning:
+            # Вычисляем смещение в экранных координатах
+            screen_delta_x = event.position().x() - self.pan_start_pos.x()
+            screen_delta_y = event.position().y() - self.pan_start_pos.y()
+            
+            # Преобразуем в сценовые координаты с учетом zoom
+            # (без учета camera_pos, так как мы вычисляем относительное смещение)
+            scene_delta_x = screen_delta_x / self.zoom_factor
+            scene_delta_y = -screen_delta_y / self.zoom_factor  # Инверсия Y
+            
+            # Применяем обратный поворот к delta
+            angle_rad = -math.radians(self.rotation_angle)
+            cos_angle = math.cos(angle_rad)
+            sin_angle = math.sin(angle_rad)
+            rotated_delta_x = scene_delta_x * cos_angle - scene_delta_y * sin_angle
+            rotated_delta_y = scene_delta_x * sin_angle + scene_delta_y * cos_angle
+            
+            # Обновляем позицию камеры
+            self.camera_pos = QPointF(
+                self.pan_start_camera.x() - rotated_delta_x,
+                self.pan_start_camera.y() - rotated_delta_y
+            )
+            
+            self.update()
+            return
+        
+        # Панорамирование средней кнопкой недоступно во время построения линии
         if self.pan_start_pos and event.buttons() & Qt.MouseButton.MiddleButton:
             # Если идет процесс построения линии, прерываем панорамирование
             if self.start_pos is not None:
@@ -378,6 +439,15 @@ class CanvasWidget(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        # Обработка отпускания левой кнопки при pan tool
+        if self.is_panning and event.button() == Qt.MouseButton.LeftButton:
+            self.is_panning = False
+            self.pan_start_pos = None
+            self.pan_start_camera = None
+            # Восстанавливаем курсор открытой руки (pan tool все еще активен)
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            return
+        
         if event.button() == Qt.MouseButton.MiddleButton:
             self.pan_start_pos = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
