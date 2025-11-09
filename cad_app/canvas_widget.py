@@ -1,7 +1,7 @@
 import math
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QPainter, QColor, QPen, QAction
-from PySide6.QtCore import Qt, QPointF, Signal
+from PySide6.QtCore import Qt, QPointF, Signal, QTimer
 
 from .core.scene import Scene
 from .core.geometry import Point, Line
@@ -43,6 +43,20 @@ class CanvasWidget(QWidget):
         
         # Для режима построения линии
         self._current_construction_mode = settings.get("line_construction_mode") or "cartesian"
+        
+        # Zoom state variables
+        self.zoom_factor = 1.0  # Текущий коэффициент масштабирования
+        self.target_zoom_factor = 1.0  # Целевой zoom для анимации
+        self.zoom_min = 0.1  # Минимальный zoom (10%)
+        self.zoom_max = 10.0  # Максимальный zoom (1000%)
+        self.zoom_step = 1.15  # Множитель изменения zoom при прокрутке колеса
+        self.zoom_animation_speed = 0.15  # Скорость интерполяции (0-1)
+        self.zoom_cursor_pos = None  # Позиция курсора для сохранения при zoom
+        
+        # QTimer for zoom animation with 16ms interval (~60 FPS)
+        self.zoom_animation_timer = QTimer(self)
+        self.zoom_animation_timer.setInterval(16)
+        self.zoom_animation_timer.timeout.connect(self._animate_zoom)
         
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
 
@@ -90,24 +104,23 @@ class CanvasWidget(QWidget):
             
     # ... (map_to_scene, map_from_scene и другие обработчики мыши остаются без изменений)
     def map_to_scene(self, screen_pos: QPointF) -> QPointF:
-        """Преобразует экранные координаты в сценовые координаты с инверсией Y.
+        """Преобразует экранные координаты в сценовые координаты с инверсией Y и учетом zoom.
         В математической системе координат Y увеличивается вверх."""
-        # Инвертируем Y: в экранных координатах Y увеличивается вниз (0 вверху, height внизу),
-        # в математических - вверх (положительные значения вверху, отрицательные внизу)
-        # Формула: scene_y = height/2 - screen_y + camera_y
-        # Это обеспечивает: screen_y=0 (вверху) -> scene_y положительное (вверх)
-        #                   screen_y=height (внизу) -> scene_y отрицательное (вниз)
-        scene_x = screen_pos.x() + self.camera_pos.x()
-        scene_y = self.height() / 2 - screen_pos.y() + self.camera_pos.y()
+        # С учетом zoom:
+        # 1. Центрируем относительно экрана
+        # 2. Применяем масштаб (делим на zoom_factor)
+        # 3. Применяем смещение камеры
+        scene_x = (screen_pos.x() - self.width() / 2) / self.zoom_factor + self.camera_pos.x()
+        scene_y = (self.height() / 2 - screen_pos.y()) / self.zoom_factor + self.camera_pos.y()
         return QPointF(scene_x, scene_y)
 
     def map_from_scene(self, scene_pos: QPointF) -> QPointF:
-        """Преобразует сценовые координаты в экранные координаты с инверсией Y."""
-        # Инвертируем Y обратно для экранных координат
-        # Из scene_y = height/2 - screen_y + camera_y следует:
-        # screen_y = height/2 - (scene_y - camera_y) = height/2 - scene_y + camera_y
-        screen_x = scene_pos.x() - self.camera_pos.x()
-        screen_y = self.height() / 2 - (scene_pos.y() - self.camera_pos.y())
+        """Преобразует сценовые координаты в экранные координаты с инверсией Y и учетом zoom."""
+        # С учетом zoom:
+        # 1. Применяем смещение камеры и масштаб (умножаем на zoom_factor)
+        # 2. Переводим в экранные координаты
+        screen_x = (scene_pos.x() - self.camera_pos.x()) * self.zoom_factor + self.width() / 2
+        screen_y = self.height() / 2 - (scene_pos.y() - self.camera_pos.y()) * self.zoom_factor
         return QPointF(screen_x, screen_y)
 
     def keyPressEvent(self, event):
@@ -118,6 +131,59 @@ class CanvasWidget(QWidget):
             event.accept()
         else:
             super().keyPressEvent(event)
+    
+    def wheelEvent(self, event):
+        """Обрабатывает события колеса мыши для масштабирования."""
+        # Получаем направление прокрутки
+        delta = event.angleDelta().y()
+        
+        if delta == 0:
+            return
+        
+        # Сохраняем позицию курсора для использования в анимации
+        self.zoom_cursor_pos = event.position()
+        
+        # Вычисляем новый target_zoom_factor
+        if delta > 0:
+            # Прокрутка вперед - увеличиваем zoom
+            new_target = self.target_zoom_factor * self.zoom_step
+        else:
+            # Прокрутка назад - уменьшаем zoom
+            new_target = self.target_zoom_factor / self.zoom_step
+        
+        # Ограничиваем zoom
+        self.target_zoom_factor = max(self.zoom_min, min(self.zoom_max, new_target))
+        
+        # Запускаем анимацию, если она еще не активна
+        if not self.zoom_animation_timer.isActive():
+            self.zoom_animation_timer.start()
+        
+        event.accept()
+    
+    def _animate_zoom(self):
+        """Выполняет один шаг анимации zoom с сохранением позиции курсора."""
+        # Проверяем, достигли ли мы целевого zoom
+        if abs(self.zoom_factor - self.target_zoom_factor) < 0.001:
+            self.zoom_factor = self.target_zoom_factor
+            self.zoom_animation_timer.stop()
+            self.update()
+            return
+        
+        # Сохраняем сценовую позицию под курсором до изменения zoom
+        if self.zoom_cursor_pos:
+            before_zoom_scene_pos = self.map_to_scene(self.zoom_cursor_pos)
+        
+        # Интерполируем zoom_factor к target_zoom_factor
+        self.zoom_factor += (self.target_zoom_factor - self.zoom_factor) * self.zoom_animation_speed
+        
+        # Корректируем camera_pos так, чтобы точка под курсором осталась на месте
+        if self.zoom_cursor_pos:
+            after_zoom_scene_pos = self.map_to_scene(self.zoom_cursor_pos)
+            # Вычисляем разницу и корректируем позицию камеры
+            delta = after_zoom_scene_pos - before_zoom_scene_pos
+            self.camera_pos -= delta
+        
+        self.update()
 
     def mousePressEvent(self, event):
         # Панорамирование недоступно во время построения линии
