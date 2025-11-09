@@ -29,6 +29,7 @@ class CanvasWidget(QWidget):
         
         self.setMouseTracking(True)
         self.setAutoFillBackground(True) # Это свойство нужно для setStyleSheet
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Разрешаем получать фокус клавиатуры
         
         # Инициализируем переменные до вызова on_settings_changed
         self.start_pos = None
@@ -57,6 +58,11 @@ class CanvasWidget(QWidget):
         self.zoom_animation_timer = QTimer(self)
         self.zoom_animation_timer.setInterval(16)
         self.zoom_animation_timer.timeout.connect(self._animate_zoom)
+        
+        # Rotation state variables
+        self.rotation_angle = 0.0  # Угол поворота вида в градусах (0-360)
+        self.rotation_step = 90.0  # Шаг поворота при нажатии клавиш
+        self.r_key_pressed = False  # Флаг нажатия клавиши R
         
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
 
@@ -104,26 +110,65 @@ class CanvasWidget(QWidget):
             
     # ... (map_to_scene, map_from_scene и другие обработчики мыши остаются без изменений)
     def map_to_scene(self, screen_pos: QPointF) -> QPointF:
-        """Преобразует экранные координаты в сценовые координаты с инверсией Y и учетом zoom.
+        """Преобразует экранные координаты в сценовые координаты с инверсией Y, учетом zoom и rotation.
         В математической системе координат Y увеличивается вверх."""
-        # С учетом zoom:
         # 1. Центрируем относительно экрана
-        # 2. Применяем масштаб (делим на zoom_factor)
-        # 3. Применяем смещение камеры
-        scene_x = (screen_pos.x() - self.width() / 2) / self.zoom_factor + self.camera_pos.x()
-        scene_y = (self.height() / 2 - screen_pos.y()) / self.zoom_factor + self.camera_pos.y()
+        centered_x = screen_pos.x() - self.width() / 2
+        centered_y = self.height() / 2 - screen_pos.y()
+        
+        # 2. Применяем обратный поворот (разворачиваем вид обратно)
+        angle_rad = -math.radians(self.rotation_angle)
+        cos_angle = math.cos(angle_rad)
+        sin_angle = math.sin(angle_rad)
+        rotated_x = centered_x * cos_angle - centered_y * sin_angle
+        rotated_y = centered_x * sin_angle + centered_y * cos_angle
+        
+        # 3. Применяем масштаб и смещение камеры
+        scene_x = rotated_x / self.zoom_factor + self.camera_pos.x()
+        scene_y = rotated_y / self.zoom_factor + self.camera_pos.y()
+        
         return QPointF(scene_x, scene_y)
 
     def map_from_scene(self, scene_pos: QPointF) -> QPointF:
-        """Преобразует сценовые координаты в экранные координаты с инверсией Y и учетом zoom."""
-        # С учетом zoom:
+        """Преобразует сценовые координаты в экранные координаты с инверсией Y, учетом zoom и rotation."""
         # 1. Применяем смещение камеры и масштаб (умножаем на zoom_factor)
-        # 2. Переводим в экранные координаты
-        screen_x = (scene_pos.x() - self.camera_pos.x()) * self.zoom_factor + self.width() / 2
-        screen_y = self.height() / 2 - (scene_pos.y() - self.camera_pos.y()) * self.zoom_factor
+        scaled_x = (scene_pos.x() - self.camera_pos.x()) * self.zoom_factor
+        scaled_y = (scene_pos.y() - self.camera_pos.y()) * self.zoom_factor
+        
+        # 2. Применяем поворот
+        angle_rad = math.radians(self.rotation_angle)
+        cos_angle = math.cos(angle_rad)
+        sin_angle = math.sin(angle_rad)
+        rotated_x = scaled_x * cos_angle - scaled_y * sin_angle
+        rotated_y = scaled_x * sin_angle + scaled_y * cos_angle
+        
+        # 3. Переводим в экранные координаты
+        screen_x = rotated_x + self.width() / 2
+        screen_y = self.height() / 2 - rotated_y
+        
         return QPointF(screen_x, screen_y)
 
     def keyPressEvent(self, event):
+        # Обработка клавиши R для поворота
+        if event.key() == Qt.Key.Key_R:
+            self.r_key_pressed = True
+            event.accept()
+            return
+        
+        # Обработка комбинаций R + Arrow keys для поворота
+        if self.r_key_pressed:
+            if event.key() == Qt.Key.Key_Left:
+                # R + Left Arrow: поворот против часовой стрелки
+                self._apply_rotation(clockwise=False)
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Right:
+                # R + Right Arrow: поворот по часовой стрелке
+                self._apply_rotation(clockwise=True)
+                event.accept()
+                return
+        
+        # Обработка Escape для отмены построения линии
         if event.key() == Qt.Key.Key_Escape and self.start_pos:
             self.start_pos = None
             self.current_pos = None
@@ -131,6 +176,14 @@ class CanvasWidget(QWidget):
             event.accept()
         else:
             super().keyPressEvent(event)
+    
+    def keyReleaseEvent(self, event):
+        """Обрабатывает отпускание клавиш."""
+        if event.key() == Qt.Key.Key_R:
+            self.r_key_pressed = False
+            event.accept()
+        else:
+            super().keyReleaseEvent(event)
     
     def wheelEvent(self, event):
         """Обрабатывает события колеса мыши для масштабирования."""
@@ -183,6 +236,26 @@ class CanvasWidget(QWidget):
             delta = after_zoom_scene_pos - before_zoom_scene_pos
             self.camera_pos -= delta
         
+        self.update()
+    
+    def _apply_rotation(self, clockwise: bool):
+        """
+        Применяет поворот вида на rotation_step градусов.
+        
+        Args:
+            clockwise: True для поворота по часовой стрелке, False для поворота против часовой стрелки
+        """
+        if clockwise:
+            # Поворот по часовой стрелке (+90°)
+            self.rotation_angle += self.rotation_step
+        else:
+            # Поворот против часовой стрелки (-90°)
+            self.rotation_angle -= self.rotation_step
+        
+        # Нормализуем угол к диапазону [0, 360)
+        self.rotation_angle = self.rotation_angle % 360.0
+        
+        # Перерисовываем холст
         self.update()
 
     def mousePressEvent(self, event):
@@ -251,12 +324,17 @@ class CanvasWidget(QWidget):
                 self.pan_start_pos = None
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             else:
-                # Панорамирование - перемещаем камеру
-                # С учетом инверсии Y: движение мыши вниз должно увеличивать camera_y
-                # чтобы видеть больше объектов вверху
-                delta = event.position() - self.pan_start_pos
-                # Инвертируем delta_y для правильной работы панорамирования
-                self.camera_pos -= QPointF(delta.x(), -delta.y())
+                # Панорамирование - перемещаем камеру с учетом поворота
+                # Вычисляем сценовые позиции до и после движения мыши
+                scene_pos_before = self.map_to_scene(self.pan_start_pos)
+                scene_pos_after = self.map_to_scene(event.position())
+                
+                # Разница в сценовых координатах показывает, насколько нужно сдвинуть камеру
+                scene_delta = scene_pos_after - scene_pos_before
+                
+                # Сдвигаем камеру в противоположном направлении
+                self.camera_pos -= scene_delta
+                
                 self.pan_start_pos = event.position()
                 self.update()
                 return  # Прерываем выполнение, чтобы не обрабатывать другие события
@@ -305,38 +383,79 @@ class CanvasWidget(QWidget):
         major_grid_interval = 5
 
         width, height = self.width(), self.height()
-        scene_top_left = self.map_to_scene(QPointF(0, 0))
-        scene_bottom_right = self.map_to_scene(QPointF(width, height))
-
-        start_x_index = math.floor(scene_top_left.x() / grid_size)
-        end_x_index = math.ceil(scene_bottom_right.x() / grid_size)
-        # С учетом инверсии Y: scene_top_left.y() теперь больше scene_bottom_right.y()
-        # поэтому нужно использовать min/max для правильного диапазона
-        scene_y_min = min(scene_top_left.y(), scene_bottom_right.y())
-        scene_y_max = max(scene_top_left.y(), scene_bottom_right.y())
+        
+        # При повороте нужно проверить все 4 угла экрана, чтобы найти правильный диапазон сетки
+        corners = [
+            self.map_to_scene(QPointF(0, 0)),           # Верхний левый
+            self.map_to_scene(QPointF(width, 0)),       # Верхний правый
+            self.map_to_scene(QPointF(0, height)),      # Нижний левый
+            self.map_to_scene(QPointF(width, height))   # Нижний правый
+        ]
+        
+        # Находим минимальные и максимальные координаты сцены
+        scene_x_min = min(corner.x() for corner in corners)
+        scene_x_max = max(corner.x() for corner in corners)
+        scene_y_min = min(corner.y() for corner in corners)
+        scene_y_max = max(corner.y() for corner in corners)
+        
+        start_x_index = math.floor(scene_x_min / grid_size)
+        end_x_index = math.ceil(scene_x_max / grid_size)
         start_y_index = math.floor(scene_y_min / grid_size)
         end_y_index = math.ceil(scene_y_max / grid_size)
 
+        # Рисуем вертикальные линии сетки (постоянный X в сцене)
         for i in range(start_x_index, end_x_index + 1):
             is_major = (i % major_grid_interval == 0)
             painter.setPen(pen_major if is_major else pen_minor)
             line_scene_x = i * grid_size
-            line_screen_x = self.map_from_scene(QPointF(line_scene_x, 0)).x()
-            painter.drawLine(int(line_screen_x), 0, int(line_screen_x), height)
+            
+            # Линия от минимального Y до максимального Y в сцене
+            start_screen = self.map_from_scene(QPointF(line_scene_x, scene_y_min))
+            end_screen = self.map_from_scene(QPointF(line_scene_x, scene_y_max))
+            painter.drawLine(start_screen.toPoint(), end_screen.toPoint())
 
+        # Рисуем горизонтальные линии сетки (постоянный Y в сцене)
         for i in range(start_y_index, end_y_index + 1):
             is_major = (i % major_grid_interval == 0)
             painter.setPen(pen_major if is_major else pen_minor)
             line_scene_y = i * grid_size
-            line_screen_y = self.map_from_scene(QPointF(0, line_scene_y)).y()
-            painter.drawLine(0, int(line_screen_y), width, int(line_screen_y))
+            
+            # Линия от минимального X до максимального X в сцене
+            start_screen = self.map_from_scene(QPointF(scene_x_min, line_scene_y))
+            end_screen = self.map_from_scene(QPointF(scene_x_max, line_scene_y))
+            painter.drawLine(start_screen.toPoint(), end_screen.toPoint())
 
     def _draw_axes(self, painter: QPainter):
-        origin_screen = self.map_from_scene(QPointF(0, 0))
+        # Рисуем оси координат с учетом поворота
+        # Ось X (красная) - горизонтальная линия через начало координат
+        # Ось Y (зеленая) - вертикальная линия через начало координат
+        
+        width, height = self.width(), self.height()
+        
+        # Находим диапазон для осей, проверяя все углы экрана
+        corners = [
+            self.map_to_scene(QPointF(0, 0)),
+            self.map_to_scene(QPointF(width, 0)),
+            self.map_to_scene(QPointF(0, height)),
+            self.map_to_scene(QPointF(width, height))
+        ]
+        
+        scene_x_min = min(corner.x() for corner in corners)
+        scene_x_max = max(corner.x() for corner in corners)
+        scene_y_min = min(corner.y() for corner in corners)
+        scene_y_max = max(corner.y() for corner in corners)
+        
+        # Рисуем ось Y (вертикальная в сцене, X=0)
         painter.setPen(QPen(QColor("#CC7A7A"), 1.5))
-        painter.drawLine(int(origin_screen.x()), 0, int(origin_screen.x()), self.height())
+        y_axis_start = self.map_from_scene(QPointF(0, scene_y_min))
+        y_axis_end = self.map_from_scene(QPointF(0, scene_y_max))
+        painter.drawLine(y_axis_start.toPoint(), y_axis_end.toPoint())
+        
+        # Рисуем ось X (горизонтальная в сцене, Y=0)
         painter.setPen(QPen(QColor("#7ACC7A"), 1.5))
-        painter.drawLine(0, int(origin_screen.y()), self.width(), int(origin_screen.y()))
+        x_axis_start = self.map_from_scene(QPointF(scene_x_min, 0))
+        x_axis_end = self.map_from_scene(QPointF(scene_x_max, 0))
+        painter.drawLine(x_axis_start.toPoint(), x_axis_end.toPoint())
 
     def _draw_scene_objects(self, painter: QPainter):
         colors = settings.get("colors") or settings.defaults["colors"]
