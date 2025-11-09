@@ -64,6 +64,18 @@ class CanvasWidget(QWidget):
         self.rotation_step = 90.0  # Шаг поворота при нажатии клавиш
         self.r_key_pressed = False  # Флаг нажатия клавиши R
         
+        # Rotation animation state variables
+        self.target_rotation_angle = 0.0  # Целевой угол для анимации
+        self.rotation_animation_duration = 50  # Длительность анимации в миллисекундах
+        self.rotation_animation_start_time = 0  # Время начала анимации
+        self.rotation_animation_start_angle = 0.0  # Начальный угол анимации
+        self.is_rotating = False  # Флаг активной анимации поворота
+        
+        # QTimer for rotation animation with 16ms interval (~60 FPS)
+        self.rotation_animation_timer = QTimer(self)
+        self.rotation_animation_timer.setInterval(16)
+        self.rotation_animation_timer.timeout.connect(self._animate_rotation)
+        
         # Rotation indicator state variables
         self.show_rotation_indicator = False  # Показывать ли индикатор поворота
         self.rotation_indicator_timer = QTimer(self)  # Таймер для скрытия индикатора
@@ -171,13 +183,13 @@ class CanvasWidget(QWidget):
         # Обработка комбинаций R + Arrow keys для поворота
         if self.r_key_pressed:
             if event.key() == Qt.Key.Key_Left:
-                # R + Left Arrow: поворот против часовой стрелки
-                self._apply_rotation(clockwise=False)
+                # R + Left Arrow: поворот по часовой стрелке
+                self._apply_rotation(clockwise=True)
                 event.accept()
                 return
             elif event.key() == Qt.Key.Key_Right:
-                # R + Right Arrow: поворот по часовой стрелке
-                self._apply_rotation(clockwise=True)
+                # R + Right Arrow: поворот против часовой стрелки
+                self._apply_rotation(clockwise=False)
                 event.accept()
                 return
         
@@ -253,24 +265,94 @@ class CanvasWidget(QWidget):
     
     def _apply_rotation(self, clockwise: bool):
         """
-        Применяет поворот вида на rotation_step градусов.
+        Запускает анимацию поворота вида на rotation_step градусов.
         
         Args:
             clockwise: True для поворота по часовой стрелке, False для поворота против часовой стрелки
         """
+        # Игнорируем новые команды поворота во время анимации
+        if self.is_rotating:
+            return
+        
+        # Сохраняем начальный угол
+        self.rotation_animation_start_angle = self.rotation_angle
+        
+        # Вычисляем целевой угол
         if clockwise:
             # Поворот по часовой стрелке (+90°)
-            self.rotation_angle += self.rotation_step
+            self.target_rotation_angle = self.rotation_angle + self.rotation_step
         else:
             # Поворот против часовой стрелки (-90°)
-            self.rotation_angle -= self.rotation_step
+            self.target_rotation_angle = self.rotation_angle - self.rotation_step
         
-        # Нормализуем угол к диапазону [0, 360)
-        self.rotation_angle = self.rotation_angle % 360.0
+        # Нормализуем целевой угол к диапазону [0, 360)
+        self.target_rotation_angle = self.target_rotation_angle % 360.0
+        
+        # Устанавливаем флаг активной анимации
+        self.is_rotating = True
+        
+        # Сохраняем время начала анимации
+        from PySide6.QtCore import QTime
+        self.rotation_animation_start_time = QTime.currentTime().msecsSinceStartOfDay()
         
         # Показываем индикатор поворота и запускаем таймер для его скрытия
         self.show_rotation_indicator = True
         self.rotation_indicator_timer.start()
+        
+        # Запускаем таймер анимации
+        if not self.rotation_animation_timer.isActive():
+            self.rotation_animation_timer.start()
+    
+    def _animate_rotation(self):
+        """
+        Выполняет один шаг анимации поворота.
+        Вызывается таймером с интервалом ~16ms (60 FPS).
+        
+        Алгоритм:
+        1. Вычислить прогресс анимации (0.0 - 1.0) на основе времени
+        2. Применить easing function для плавности (ease-in-out cubic)
+        3. Интерполировать rotation_angle между start и target
+        4. Обработать переход через 0°/360° (выбрать кратчайший путь)
+        5. Если анимация завершена, установить точное значение и остановить таймер
+        6. Вызвать update() для перерисовки
+        """
+        from PySide6.QtCore import QTime
+        
+        # Вычисляем прошедшее время
+        current_time = QTime.currentTime().msecsSinceStartOfDay()
+        elapsed = current_time - self.rotation_animation_start_time
+        
+        # Вычисляем прогресс (0.0 - 1.0)
+        progress = min(1.0, elapsed / self.rotation_animation_duration)
+        
+        # Применяем easing function (ease-in-out cubic)
+        # Формула: t < 0.5 ? 4*t^3 : 1 - (-2*t + 2)^3 / 2
+        if progress < 0.5:
+            eased_progress = 4 * progress * progress * progress
+        else:
+            eased_progress = 1 - pow(-2 * progress + 2, 3) / 2
+        
+        # Вычисляем разницу углов с учетом кратчайшего пути
+        angle_diff = self.target_rotation_angle - self.rotation_animation_start_angle
+        
+        # Нормализуем разницу к диапазону [-180, 180] для кратчайшего пути
+        if angle_diff > 180:
+            angle_diff -= 360
+        elif angle_diff < -180:
+            angle_diff += 360
+        
+        # Интерполируем угол
+        self.rotation_angle = self.rotation_animation_start_angle + angle_diff * eased_progress
+        
+        # Нормализуем к диапазону [0, 360)
+        self.rotation_angle = self.rotation_angle % 360.0
+        
+        # Проверяем завершение анимации
+        if progress >= 1.0:
+            # Устанавливаем точное значение
+            self.rotation_angle = self.target_rotation_angle
+            self.is_rotating = False
+            self.rotation_animation_timer.stop()
         
         # Перерисовываем холст
         self.update()
@@ -756,8 +838,8 @@ class CanvasWidget(QWidget):
         
         # Рисуем стрелку, указывающую текущий угол поворота
         # Угол поворота в нашей системе: 0° = нет поворота, 90° = поворот по часовой на 90°
-        # В индикаторе: 0° вверху, по часовой стрелке
-        arrow_angle_rad = math.radians(self.rotation_angle - 90)  # -90 чтобы 0° был вверху
+        # В индикаторе: 0° вверху, инвертируем направление для соответствия визуальному повороту
+        arrow_angle_rad = math.radians(-self.rotation_angle - 90)  # Инвертируем и -90 чтобы 0° был вверху
         arrow_length = radius - 5
         arrow_x = center_x + arrow_length * math.cos(arrow_angle_rad)
         arrow_y = center_y + arrow_length * math.sin(arrow_angle_rad)
@@ -785,7 +867,9 @@ class CanvasWidget(QWidget):
         # Рисуем текстовое значение угла в центре
         painter.setPen(QPen(QColor("#FFFFFF"), 1))
         painter.setFont(painter.font())
-        text = f"{int(self.rotation_angle)}°"
+        # Инвертируем угол для отображения (360 - angle), чтобы соответствовать визуальному направлению
+        display_angle = (360 - int(self.rotation_angle)) % 360
+        text = f"{display_angle}°"
         text_rect = painter.fontMetrics().boundingRect(text)
         text_x = center_x - text_rect.width() // 2
         text_y = center_y + text_rect.height() // 4
