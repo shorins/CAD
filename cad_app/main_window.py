@@ -210,6 +210,7 @@ class MainWindow(QMainWindow):
             project_data = {
                 "version": "1.0",
                 "settings": settings.settings,
+                "view_state": self.canvas.get_view_state(),
                 "objects": [obj.to_dict() for obj in self.scene.objects]
             }
 
@@ -244,6 +245,10 @@ class MainWindow(QMainWindow):
                 if "settings" in project_data:
                     for key, value in project_data["settings"].items():
                         settings.set(key, value)
+                
+                # Загружаем состояние вида, если оно есть
+                if "view_state" in project_data:
+                    self.canvas.set_view_state(project_data["view_state"])
 
                 # Воссоздаем объекты из файла
                 new_objects = []

@@ -807,3 +807,20 @@ class CanvasWidget(QWidget):
         # Запускаем анимацию zoom
         if not self.zoom_animation_timer.isActive():
             self.zoom_animation_timer.start()
+    
+    def get_view_state(self):
+        """Возвращает текущее состояние вида для сохранения."""
+        return {
+            "camera_pos": {"x": self.camera_pos.x(), "y": self.camera_pos.y()},
+            "zoom_factor": self.zoom_factor,
+            "rotation_angle": self.rotation_angle
+        }
+    
+    def set_view_state(self, state):
+        """Восстанавливает состояние вида из сохраненных данных."""
+        if "camera_pos" in state:
+            self.camera_pos = QPointF(state["camera_pos"]["x"], state["camera_pos"]["y"])
+        self.zoom_factor = state.get("zoom_factor", 1.0)
+        self.target_zoom_factor = self.zoom_factor  # Синхронизируем target с текущим значением
+        self.rotation_angle = state.get("rotation_angle", 0.0)
+        self.update()
