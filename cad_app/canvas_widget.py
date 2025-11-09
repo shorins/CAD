@@ -1,6 +1,6 @@
 import math
-from PySide6.QtWidgets import QWidget
-from PySide6.QtGui import QPainter, QColor, QPen, QAction
+from PySide6.QtWidgets import QWidget, QMenu
+from PySide6.QtGui import QPainter, QColor, QPen, QAction, QContextMenuEvent, QIcon
 from PySide6.QtCore import Qt, QPointF, Signal, QTimer
 
 from .core.scene import Scene
@@ -10,6 +10,7 @@ from .core.math_utils import (distance_point_to_segment_sq, get_distance,
                              cartesian_to_polar, get_angle_between_points,
                              radians_to_degrees, degrees_to_radians, polar_to_cartesian)
 from .settings import settings
+from .icon_utils import load_svg_icon
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
@@ -961,6 +962,151 @@ class CanvasWidget(QWidget):
         # Запускаем анимацию zoom
         if not self.zoom_animation_timer.isActive():
             self.zoom_animation_timer.start()
+    
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """
+        Обрабатывает событие вызова контекстного меню (правая кнопка мыши).
+        
+        Args:
+            event: Событие контекстного меню с позицией курсора
+        """
+        menu = self._create_context_menu(event.pos())
+        menu.exec(event.globalPos())
+    
+    def _create_context_menu(self, cursor_pos: QPointF) -> QMenu:
+        """
+        Создает контекстное меню в зависимости от контекста.
+        
+        Args:
+            cursor_pos: Позиция курсора в экранных координатах
+        
+        Returns:
+            QMenu: Настроенное контекстное меню
+        """
+        menu = QMenu(self)
+        
+        # Проверяем, есть ли объект под курсором
+        obj = self._get_object_at_cursor(cursor_pos)
+        
+        # Добавляем подменю "Вид" (всегда присутствует)
+        view_submenu = self._create_view_submenu()
+        menu.addMenu(view_submenu)
+        
+        # Если есть объект под курсором, добавляем команды для работы с объектами
+        if obj:
+            # Добавляем разделитель перед командами объекта
+            menu.addSeparator()
+            
+            # ===== Место для будущих команд работы с объектами =====
+            # Примеры команд, которые можно добавить:
+            # - Изменить... (редактирование свойств объекта)
+            # - Удалить (удаление выбранного объекта)
+            # - Копировать (копирование объекта)
+            # - Свойства... (диалог со свойствами объекта)
+            # 
+            # Пример добавления команды:
+            # edit_action = menu.addAction("Изменить...")
+            # edit_action.setIcon(load_svg_icon("public/edit.svg"))
+            # edit_action.triggered.connect(lambda: self._on_edit_object(obj))
+        
+        return menu
+    
+    def _create_view_submenu(self) -> QMenu:
+        """
+        Создает подменю "Вид" с командами управления видом.
+        
+        Returns:
+            QMenu: Подменю с командами управления видом
+        """
+        view_menu = QMenu("Вид", self)
+        
+        # Добавляем команду "Панорамирование" с иконкой и чекбоксом
+        pan_action = view_menu.addAction("Панорамирование")
+        pan_action.setIcon(load_svg_icon("public/move.svg"))
+        pan_action.setCheckable(True)
+        pan_action.setChecked(self.pan_tool_active)
+        pan_action.triggered.connect(self._on_context_menu_pan_tool)
+        
+        # Добавляем команду "Показать всё" с иконкой
+        zoom_fit_action = view_menu.addAction("Показать всё")
+        zoom_fit_action.setIcon(QIcon.fromTheme("zoom-fit-best"))
+        zoom_fit_action.triggered.connect(self.zoom_to_fit)
+        
+        # Добавляем разделитель
+        view_menu.addSeparator()
+        
+        # Добавляем команду "Повернуть сцену налево 90°" с иконкой
+        rotate_left_action = view_menu.addAction("Повернуть сцену направо 90°")
+        rotate_left_action.setIcon(load_svg_icon("public/rotate.svg"))
+        rotate_left_action.triggered.connect(lambda: self._apply_rotation(clockwise=False))
+        
+        # Добавляем команду "Повернуть сцену направо 90°" с иконкой
+        rotate_right_action = view_menu.addAction("Повернуть сцену налево 90°")
+        rotate_right_action.setIcon(load_svg_icon("public/rotate_right.svg"))
+        rotate_right_action.triggered.connect(lambda: self._apply_rotation(clockwise=True))
+        
+        return view_menu
+    
+    def _on_context_menu_pan_tool(self, checked: bool):
+        """
+        Обработчик активации pan tool из контекстного меню.
+        Синхронизирует состояние с toolbar в MainWindow.
+        
+        Args:
+            checked: True для активации, False для деактивации
+        """
+        # Активируем pan tool в canvas
+        self.set_pan_tool_active(checked)
+        
+        # Находим parent MainWindow, проходя по иерархии родителей
+        parent = self.parent()
+        while parent is not None:
+            # Проверяем, является ли parent экземпляром QMainWindow
+            if parent.__class__.__name__ == 'MainWindow':
+                # Синхронизируем состояние pan_tool_action в toolbar
+                if hasattr(parent, 'pan_tool_action'):
+                    parent.pan_tool_action.setChecked(checked)
+                
+                # Деактивируем другие инструменты, если pan tool активирован
+                if checked:
+                    if hasattr(parent, 'line_tool_action'):
+                        parent.line_tool_action.setChecked(False)
+                    if hasattr(parent, 'delete_tool_action'):
+                        parent.delete_tool_action.setChecked(False)
+                break
+            parent = parent.parent()
+    
+    def _get_object_at_cursor(self, cursor_pos: QPointF) -> object | None:
+        """
+        Определяет, есть ли объект под курсором.
+        
+        Args:
+            cursor_pos: Позиция курсора в экранных координатах
+        
+        Returns:
+            object | None: Объект под курсором или None
+        """
+        # Преобразуем cursor_pos в сценовые координаты
+        scene_cursor_pos = self.map_to_scene(cursor_pos)
+        cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
+        
+        # Проверяем все объекты сцены на попадание
+        nearest_object = None
+        min_distance_sq = self.selection_threshold ** 2  # Квадрат порогового расстояния
+        
+        for obj in self.scene.objects:
+            if isinstance(obj, Line):
+                start_qpoint = QPointF(obj.start.x, obj.start.y)
+                end_qpoint = QPointF(obj.end.x, obj.end.y)
+                
+                # Используем существующую логику distance_point_to_segment_sq
+                distance_sq = distance_point_to_segment_sq(cursor_qpoint, start_qpoint, end_qpoint)
+                
+                if distance_sq < min_distance_sq:
+                    min_distance_sq = distance_sq
+                    nearest_object = obj
+        
+        return nearest_object
     
     def get_view_state(self):
         """Возвращает текущее состояние вида для сохранения."""

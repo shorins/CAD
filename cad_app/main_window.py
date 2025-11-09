@@ -4,9 +4,8 @@ import sys
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStatusBar, 
                                QToolBar, QLabel, QFileDialog)
-from PySide6.QtGui import QAction, QIcon, QActionGroup, QPixmap, QPainter
+from PySide6.QtGui import QAction, QIcon, QActionGroup
 from PySide6.QtCore import Qt
-from PySide6.QtSvg import QSvgRenderer
 
 from .core.scene import Scene
 from .core.geometry import Line, Point
@@ -15,33 +14,7 @@ from .theme import get_stylesheet
 from .settings_dialog import SettingsDialog
 from .settings import settings
 from .line_input_panel import LineInputPanel
-
-
-def load_svg_icon(svg_path, color="#FFFFFF"):
-    """Загружает SVG иконку и перекрашивает её в указанный цвет."""
-    # Читаем SVG файл
-    with open(svg_path, 'r', encoding='utf-8') as f:
-        svg_content = f.read()
-    
-    # Заменяем fill и stroke на нужный цвет
-    # Удаляем существующие атрибуты fill и добавляем свой
-    import re
-    svg_content = re.sub(r'fill="[^"]*"', '', svg_content)
-    svg_content = re.sub(r'stroke="[^"]*"', '', svg_content)
-    
-    # Добавляем fill к path элементам
-    svg_content = svg_content.replace('<path', f'<path fill="{color}"')
-    
-    # Создаем QPixmap из модифицированного SVG
-    renderer = QSvgRenderer(svg_content.encode('utf-8'))
-    pixmap = QPixmap(64, 64)  # Размер иконки
-    pixmap.fill(Qt.GlobalColor.transparent)
-    
-    painter = QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-    
-    return QIcon(pixmap)
+from .icon_utils import load_svg_icon
 
 class MainWindow(QMainWindow):
     def __init__(self):
