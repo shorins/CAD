@@ -49,9 +49,21 @@ jobs:
         run: pip install -r requirements.txt
       
       # Используем созданные переменные
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (macOS)
+        if: runner.os == 'macOS'
         run: >
-          pyinstaller --name "ShorinsCAD" --windowed --onefile --icon "assets/icon.${{ steps.vars.outputs.ICON_EXT }}" run.py
+          pyinstaller --name "ShorinsCAD" --windowed --onefile 
+          --icon "assets/icon.${{ steps.vars.outputs.ICON_EXT }}" 
+          --add-data "public:public" 
+          run.py
+      
+      - name: Build with PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller --name "ShorinsCAD" --windowed --onefile 
+          --icon "assets/icon.${{ steps.vars.outputs.ICON_EXT }}" 
+          --add-data "public;public" 
+          run.py
 
       # Используем созданные переменные
       - name: Archive macOS App Bundle

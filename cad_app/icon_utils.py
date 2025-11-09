@@ -1,9 +1,31 @@
 """Утилиты для работы с иконками."""
 
+import os
+import sys
 import re
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtCore import Qt
 from PySide6.QtSvg import QSvgRenderer
+
+
+def get_resource_path(relative_path: str) -> str:
+    """
+    Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller.
+    
+    Args:
+        relative_path: Относительный путь к ресурсу
+    
+    Returns:
+        str: Абсолютный путь к ресурсу
+    """
+    try:
+        # PyInstaller создает временную папку и сохраняет путь в _MEIPASS
+        base_path = sys._MEIPASS
+    except AttributeError:
+        # В режиме разработки используем текущую директорию
+        base_path = os.path.abspath(".")
+    
+    return os.path.join(base_path, relative_path)
 
 
 def load_svg_icon(svg_path: str, color: str = "#FFFFFF") -> QIcon:
@@ -11,14 +33,17 @@ def load_svg_icon(svg_path: str, color: str = "#FFFFFF") -> QIcon:
     Загружает SVG иконку и перекрашивает её в указанный цвет.
     
     Args:
-        svg_path: Путь к SVG файлу
+        svg_path: Путь к SVG файлу (относительный)
         color: Цвет для перекраски (hex формат)
     
     Returns:
         QIcon: Иконка с перекрашенным SVG
     """
+    # Получаем абсолютный путь к ресурсу
+    absolute_path = get_resource_path(svg_path)
+    
     # Читаем SVG файл
-    with open(svg_path, 'r', encoding='utf-8') as f:
+    with open(absolute_path, 'r', encoding='utf-8') as f:
         svg_content = f.read()
     
     # Заменяем fill и stroke на нужный цвет
