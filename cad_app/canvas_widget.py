@@ -709,3 +709,87 @@ class CanvasWidget(QWidget):
         
         # Восстанавливаем состояние painter
         painter.restore()
+    
+    def _calculate_scene_bounds(self):
+        """
+        Вычисляет bounding box всех объектов в сцене.
+        
+        Returns:
+            tuple[QPointF, QPointF] | None: (min_point, max_point) - углы bounding box в сценовых координатах
+                                            None если объектов нет в сцене
+        """
+        if not self.scene.objects:
+            return None
+        
+        min_x = float('inf')
+        min_y = float('inf')
+        max_x = float('-inf')
+        max_y = float('-inf')
+        
+        for obj in self.scene.objects:
+            if isinstance(obj, Line):
+                # Для линии проверяем обе точки
+                min_x = min(min_x, obj.start.x, obj.end.x)
+                min_y = min(min_y, obj.start.y, obj.end.y)
+                max_x = max(max_x, obj.start.x, obj.end.x)
+                max_y = max(max_y, obj.start.y, obj.end.y)
+            # TODO: Добавить обработку других типов объектов (круги, дуги)
+        
+        return (QPointF(min_x, min_y), QPointF(max_x, max_y))
+    
+    def zoom_to_fit(self):
+        """
+        Автоматически масштабирует и центрирует вид для отображения всех объектов.
+        Добавляет 10% padding вокруг bounding box.
+        """
+        bounds = self._calculate_scene_bounds()
+        
+        if bounds is None:
+            # Нет объектов - возвращаемся к начальному виду
+            self.target_zoom_factor = 1.0
+            self.camera_pos = QPointF(-self.width() / 2, 0)
+            if not self.zoom_animation_timer.isActive():
+                self.zoom_animation_timer.start()
+            return
+        
+        min_point, max_point = bounds
+        
+        # Вычисляем размеры bounding box
+        bbox_width = max_point.x() - min_point.x()
+        bbox_height = max_point.y() - min_point.y()
+        
+        # Добавляем отступы 10%
+        padding = 0.1
+        bbox_width *= (1 + padding * 2)
+        bbox_height *= (1 + padding * 2)
+        
+        # Защита от деления на ноль для очень маленьких объектов
+        if bbox_width < 0.01:
+            bbox_width = 10.0
+        if bbox_height < 0.01:
+            bbox_height = 10.0
+        
+        # Вычисляем необходимый zoom для вмещения bbox
+        # Учитываем, что нужно вместить и по ширине, и по высоте
+        zoom_x = self.width() / bbox_width if bbox_width > 0 else 1.0
+        zoom_y = self.height() / bbox_height if bbox_height > 0 else 1.0
+        
+        # Выбираем меньший zoom, чтобы все поместилось
+        new_zoom = min(zoom_x, zoom_y)
+        
+        # Ограничиваем zoom
+        self.target_zoom_factor = max(self.zoom_min, min(self.zoom_max, new_zoom))
+        
+        # Центрируем камеру на центре bounding box
+        center_x = (min_point.x() + max_point.x()) / 2
+        center_y = (min_point.y() + max_point.y()) / 2
+        
+        # Устанавливаем camera_pos так, чтобы центр bbox был в центре экрана
+        self.camera_pos = QPointF(center_x, center_y)
+        
+        # Сбрасываем zoom_cursor_pos, чтобы анимация не пыталась сохранить позицию курсора
+        self.zoom_cursor_pos = None
+        
+        # Запускаем анимацию zoom
+        if not self.zoom_animation_timer.isActive():
+            self.zoom_animation_timer.start()

@@ -31,6 +31,9 @@ class MainWindow(QMainWindow):
         # Теперь line_tool_action и delete_tool_action уже определены
         self.canvas = CanvasWidget(self.scene, self.line_tool_action, self.delete_tool_action)
         self.setCentralWidget(self.canvas)
+        
+        # Подключаем zoom_fit_action после создания canvas
+        self.zoom_fit_action.triggered.connect(self.canvas.zoom_to_fit)
 
         self._create_menus()
         self._create_toolbars()
@@ -59,6 +62,11 @@ class MainWindow(QMainWindow):
         self.delete_tool_action = QAction(QIcon.fromTheme("edit-delete"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
 
+        # Кнопка zoom to fit
+        self.zoom_fit_action = QAction(QIcon.fromTheme("zoom-fit-best"), "По размеру", self)
+        self.zoom_fit_action.setToolTip("Показать все объекты (Ctrl+0)")
+        self.zoom_fit_action.setShortcut("Ctrl+0")
+
         # Кнопка переключения режима построения линии (θ - полярные координаты)
         self.polar_mode_action = QAction("θ", self)
         self.polar_mode_action.setCheckable(True)
@@ -72,6 +80,7 @@ class MainWindow(QMainWindow):
         self.new_action.triggered.connect(self.new_project)
         self.exit_action.triggered.connect(self.close)
         self.settings_action.triggered.connect(self.open_settings)
+        # Note: zoom_fit_action will be connected after canvas is created
 
     def _create_menus(self):
         file_menu = self.menuBar().addMenu("&Файл")
@@ -95,6 +104,10 @@ class MainWindow(QMainWindow):
         
         edit_toolbar.addAction(self.line_tool_action)
         edit_toolbar.addAction(self.delete_tool_action)
+        
+        # Zoom to fit
+        edit_toolbar.addSeparator()
+        edit_toolbar.addAction(self.zoom_fit_action)
         
         # Переключатель режима построения линии
         edit_toolbar.addSeparator()
