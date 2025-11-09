@@ -102,6 +102,15 @@ class MainWindow(QMainWindow):
         self.zoom_fit_action.setToolTip("Показать все объекты (Ctrl+0)")
         self.zoom_fit_action.setShortcut("Ctrl+0")
 
+        # Кнопки поворота вида
+        self.rotate_left_action = QAction(load_svg_icon("public/rotate.svg"), "Повернуть влево", self)
+        self.rotate_left_action.setToolTip("Повернуть вид по часовой стрелке (R + Left)")
+        self.rotate_left_action.triggered.connect(self._on_rotate_left)
+
+        self.rotate_right_action = QAction(load_svg_icon("public/rotate_right.svg"), "Повернуть вправо", self)
+        self.rotate_right_action.setToolTip("Повернуть вид против часовой стрелки (R + Right)")
+        self.rotate_right_action.triggered.connect(self._on_rotate_right)
+
         # Кнопка переключения режима построения линии (θ - полярные координаты)
         self.polar_mode_action = QAction(load_svg_icon("public/polar.svg"), "θ", self)
         self.polar_mode_action.setCheckable(True)
@@ -145,6 +154,11 @@ class MainWindow(QMainWindow):
         # Zoom to fit
         edit_toolbar.addSeparator()
         edit_toolbar.addAction(self.zoom_fit_action)
+        
+        # Кнопки поворота вида
+        edit_toolbar.addSeparator()
+        edit_toolbar.addAction(self.rotate_left_action)
+        edit_toolbar.addAction(self.rotate_right_action)
         
         # Переключатель режима построения линии
         edit_toolbar.addSeparator()
@@ -203,6 +217,14 @@ class MainWindow(QMainWindow):
         
         # Активируем/деактивируем pan tool в canvas
         self.canvas.set_pan_tool_active(checked)
+    
+    def _on_rotate_left(self):
+        """Обработчик кнопки поворота влево (по часовой стрелке)."""
+        self.canvas._apply_rotation(clockwise=True)
+    
+    def _on_rotate_right(self):
+        """Обработчик кнопки поворота вправо (против часовой стрелки)."""
+        self.canvas._apply_rotation(clockwise=False)
     
     def _on_line_build_requested(self, start_point: Point, end_point: Point):
         """Обработчик запроса на построение линии из панели ввода."""
