@@ -424,9 +424,18 @@ class CanvasWidget(QWidget):
         start_y_index = math.floor(scene_y_min / grid_size)
         end_y_index = math.ceil(scene_y_max / grid_size)
 
+        # Определяем, нужно ли рисовать minor линии на основе zoom_factor
+        # При zoom < 0.5 скрываем minor линии для улучшения производительности и читаемости
+        show_minor_lines = self.zoom_factor >= 0.5
+
         # Рисуем вертикальные линии сетки (постоянный X в сцене)
         for i in range(start_x_index, end_x_index + 1):
             is_major = (i % major_grid_interval == 0)
+            
+            # Пропускаем minor линии, если zoom слишком мал
+            if not is_major and not show_minor_lines:
+                continue
+            
             painter.setPen(pen_major if is_major else pen_minor)
             line_scene_x = i * grid_size
             
@@ -438,6 +447,11 @@ class CanvasWidget(QWidget):
         # Рисуем горизонтальные линии сетки (постоянный Y в сцене)
         for i in range(start_y_index, end_y_index + 1):
             is_major = (i % major_grid_interval == 0)
+            
+            # Пропускаем minor линии, если zoom слишком мал
+            if not is_major and not show_minor_lines:
+                continue
+            
             painter.setPen(pen_major if is_major else pen_minor)
             line_scene_y = i * grid_size
             
