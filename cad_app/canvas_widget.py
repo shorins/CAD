@@ -40,7 +40,8 @@ class CanvasWidget(QWidget):
         self._initial_center_done = False
         
         # Для режима удаления
-        self.highlighted_line = None  # Линия, которая выделена при наведении
+        self.highlighted_line = None  # Линия, которая выделена при наведении (красная, для удаления)
+        self.hover_highlighted_line = None  # Линия, подсвеченная при наведении (голубая)
         self.selection_threshold = 10.0  # Пороговое расстояние в пикселях для выделения
         
         # Для режима построения линии
@@ -499,6 +500,9 @@ class CanvasWidget(QWidget):
                 self.update()
                 return  # Прерываем выполнение, чтобы не обрабатывать другие события
         
+        # Всегда ищем линию под курсором для hover подсветки (независимо от инструмента)
+        self._find_hover_line(event.position())
+        
         # Обработка режима удаления
         if self.delete_tool_action.isChecked():
             # В режиме удаления ищем ближайшую линию
@@ -540,7 +544,8 @@ class CanvasWidget(QWidget):
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_scene_objects(painter)
-        self._draw_highlighted_line(painter)
+        self._draw_hover_highlighted_line(painter)  # Рисуем hover подсветку (голубая)
+        self._draw_highlighted_line(painter)  # Рисуем delete подсветку (красная)
         self._draw_preview(painter)
         
         # Отрисовываем индикатор поворота поверх всего остального
@@ -652,6 +657,9 @@ class CanvasWidget(QWidget):
 
         for obj in self.scene.objects:
             if isinstance(obj, Line):
+                # Пропускаем hover линию - она будет отрисована отдельно голубым
+                if obj == self.hover_highlighted_line:
+                    continue
                 # Пропускаем выделенную линию - она будет отрисована отдельно красным
                 if obj == self.highlighted_line and self.delete_tool_action.isChecked():
                     continue
@@ -738,7 +746,7 @@ class CanvasWidget(QWidget):
     
     def _find_nearest_line(self, cursor_pos: QPointF):
         """
-        Находит ближайшую линию к курсору и устанавливает её как выделенную.
+        Находит ближайшую линию к курсору и устанавливает её как выделенную (для режима удаления).
         """
         scene_cursor_pos = self.map_to_scene(cursor_pos)
         cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
@@ -763,9 +771,58 @@ class CanvasWidget(QWidget):
             self.highlighted_line = nearest_line
             self.update()
     
+    def _find_hover_line(self, cursor_pos: QPointF):
+        """
+        Находит ближайшую линию к курсору для hover подсветки (голубая).
+        Работает независимо от активного инструмента.
+        """
+        scene_cursor_pos = self.map_to_scene(cursor_pos)
+        cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
+        
+        nearest_line = None
+        min_distance_sq = self.selection_threshold ** 2  # Квадрат порогового расстояния
+        
+        for obj in self.scene.objects:
+            if isinstance(obj, Line):
+                start_qpoint = QPointF(obj.start.x, obj.start.y)
+                end_qpoint = QPointF(obj.end.x, obj.end.y)
+                
+                # Вычисляем расстояние от курсора до отрезка
+                distance_sq = distance_point_to_segment_sq(cursor_qpoint, start_qpoint, end_qpoint)
+                
+                if distance_sq < min_distance_sq:
+                    min_distance_sq = distance_sq
+                    nearest_line = obj
+        
+        # Обновляем hover линию только если она изменилась
+        if nearest_line != self.hover_highlighted_line:
+            self.hover_highlighted_line = nearest_line
+            self.update()
+    
+    def _draw_hover_highlighted_line(self, painter: QPainter):
+        """
+        Отрисовывает линию с hover подсветкой голубым цветом.
+        """
+        if self.hover_highlighted_line:
+            # Отрисовываем hover линию голубым цветом
+            pen = QPen(QColor("#7ACCCC"), 3)  # Голубой цвет, толщина 3
+            painter.setPen(pen)
+            
+            start_screen = self.map_from_scene(QPointF(self.hover_highlighted_line.start.x, 
+                                                        self.hover_highlighted_line.start.y))
+            end_screen = self.map_from_scene(QPointF(self.hover_highlighted_line.end.x, 
+                                                      self.hover_highlighted_line.end.y))
+            
+            points_generator = bresenham(
+                int(start_screen.x()), int(start_screen.y()),
+                int(end_screen.x()), int(end_screen.y())
+            )
+            for point in points_generator:
+                painter.drawPoint(*point)
+    
     def _draw_highlighted_line(self, painter: QPainter):
         """
-        Отрисовывает выделенную линию красным цветом.
+        Отрисовывает выделенную линию красным цветом (для режима удаления).
         """
         if self.highlighted_line and self.delete_tool_action.isChecked():
             # Отрисовываем выделенную линию красным цветом
@@ -985,29 +1042,30 @@ class CanvasWidget(QWidget):
         """
         menu = QMenu(self)
         
-        # Проверяем, есть ли объект под курсором
-        obj = self._get_object_at_cursor(cursor_pos)
-        
         # Добавляем подменю "Вид" (всегда присутствует)
         view_submenu = self._create_view_submenu()
         menu.addMenu(view_submenu)
         
-        # Если есть объект под курсором, добавляем команды для работы с объектами
-        if obj:
+        # Проверяем, есть ли объект под курсором (используем hover_highlighted_line)
+        if self.hover_highlighted_line:
             # Добавляем разделитель перед командами объекта
             menu.addSeparator()
+            
+            # Добавляем команду "Удалить"
+            delete_action = menu.addAction("Удалить")
+            delete_action.setIcon(load_svg_icon("public/delete.svg"))
+            delete_action.triggered.connect(self._on_context_menu_delete)
             
             # ===== Место для будущих команд работы с объектами =====
             # Примеры команд, которые можно добавить:
             # - Изменить... (редактирование свойств объекта)
-            # - Удалить (удаление выбранного объекта)
             # - Копировать (копирование объекта)
             # - Свойства... (диалог со свойствами объекта)
             # 
             # Пример добавления команды:
             # edit_action = menu.addAction("Изменить...")
             # edit_action.setIcon(load_svg_icon("public/edit.svg"))
-            # edit_action.triggered.connect(lambda: self._on_edit_object(obj))
+            # edit_action.triggered.connect(lambda: self._on_edit_object(self.hover_highlighted_line))
         
         return menu
     
@@ -1075,6 +1133,16 @@ class CanvasWidget(QWidget):
                         parent.delete_tool_action.setChecked(False)
                 break
             parent = parent.parent()
+    
+    def _on_context_menu_delete(self):
+        """
+        Обработчик удаления объекта из контекстного меню.
+        Удаляет hover_highlighted_line из сцены.
+        """
+        if self.hover_highlighted_line:
+            self.scene.remove_object(self.hover_highlighted_line)
+            self.hover_highlighted_line = None
+            self.update()
     
     def _get_object_at_cursor(self, cursor_pos: QPointF) -> object | None:
         """
