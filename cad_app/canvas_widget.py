@@ -1,29 +1,32 @@
 import math
 from PySide6.QtWidgets import QWidget, QMenu
-from PySide6.QtGui import QPainter, QColor, QPen, QAction, QContextMenuEvent, QIcon
+from PySide6.QtGui import QPainter, QColor, QPen, QAction, QContextMenuEvent, QIcon, QMouseEvent
 from PySide6.QtCore import Qt, QPointF, Signal, QTimer
 
 from .core.scene import Scene
 from .core.geometry import Point, Line
-from .core.algorithms import bresenham
+# from .core.algorithms import bresenham
 from .core.math_utils import (distance_point_to_segment_sq, get_distance, 
                              cartesian_to_polar, get_angle_between_points,
                              radians_to_degrees, degrees_to_radians, polar_to_cartesian)
 from .settings import settings
 from .icon_utils import load_svg_icon
+from .core.style_manager import style_manager
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
     line_info_changed = Signal(str)  # Сигнал для передачи информации о линии
     zoom_changed = Signal(float)  # Сигнал для передачи текущего zoom_factor
     rotation_changed = Signal(float)  # Сигнал для передачи текущего rotation_angle
+    selection_changed = Signal(list) # Сигнал об изменении выделения (передает список выделенных объектов)
 
-    def __init__(self, scene: Scene, line_tool_action: QAction, delete_tool_action: QAction, parent=None):
+    def __init__(self, scene: Scene, select_tool_action: QAction, line_tool_action: QAction, delete_tool_action: QAction, parent=None):
         super().__init__(parent)
         self.scene = scene
         self.scene.scene_changed.connect(self.update)
         settings.settings_changed.connect(self.on_settings_changed)
 
+        self.select_tool_action = select_tool_action
         self.line_tool_action = line_tool_action
         self.delete_tool_action = delete_tool_action
         
@@ -33,6 +36,8 @@ class CanvasWidget(QWidget):
         self.setMouseTracking(True)
         self.setAutoFillBackground(True) # Это свойство нужно для setStyleSheet
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Разрешаем получать фокус клавиатуры
+
+        self.selected_objects = [] # <-- Список выделенных объектов
         
         # Инициализируем переменные до вызова on_settings_changed
         self.start_pos = None
@@ -395,8 +400,7 @@ class CanvasWidget(QWidget):
             self.pan_start_pos = None
             self.pan_start_camera = None
 
-    def mousePressEvent(self, event):
-        # Обработка pan tool с левой кнопкой мыши
+    def mousePressEvent(self, event: QMouseEvent):
         if self.pan_tool_active and event.button() == Qt.MouseButton.LeftButton:
             self.is_panning = True
             self.pan_start_pos = event.position()
@@ -404,59 +408,84 @@ class CanvasWidget(QWidget):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
         
-        # Панорамирование средней кнопкой недоступно во время построения линии
         if event.button() == Qt.MouseButton.MiddleButton:
-            # Если идет процесс построения линии, игнорируем панорамирование
-            if self.start_pos is not None:
-                return
+            if self.start_pos is not None: return
             self.pan_start_pos = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             self.update()
-            return  # Прерываем выполнение, чтобы не обрабатывать другие события
+            return
         
+        # 1. Инструмент ЛИНИЯ
         if self.line_tool_action.isChecked():
             if event.button() == Qt.MouseButton.LeftButton:
                 if self.start_pos is None:
-                    # Первый клик: начинаем рисовать линию
-                    # Сбрасываем панорамирование, если оно было активно
                     if self.pan_start_pos is not None:
                         self.pan_start_pos = None
                         self.setCursor(Qt.CursorShape.ArrowCursor)
                     self.start_pos = event.position()
                     self.current_pos = self.start_pos
-                    self._update_line_info()  # Обновляем информацию о линии
+                    self._update_line_info()
+                    # Сбрасываем выделение при начале рисования
+                    if self.selected_objects:
+                        self.selected_objects = []
+                        self.selection_changed.emit(self.selected_objects)
                 else:
-                    # Второй клик: завершаем линию
+                    # Завершаем линию
                     start_scene_pos = self.map_to_scene(self.start_pos)
-                    
                     if self._current_construction_mode == "polar":
-                        # В полярном режиме используем текущую позицию курсора для вычисления полярных координат
-                        # Используем self.current_pos если оно есть, иначе event.position()
                         cursor_pos = self.current_pos if self.current_pos else event.position()
                         current_scene_pos = self.map_to_scene(cursor_pos)
                         end_point_qpoint = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
                         end_point = Point(end_point_qpoint.x(), end_point_qpoint.y())
                     else:
-                        # В декартовом режиме используем позицию клика напрямую
                         end_scene_pos = self.map_to_scene(event.position())
                         end_point = Point(end_scene_pos.x(), end_scene_pos.y())
                     
+                    # Создаем линию с ТЕКУЩИМ стилем из менеджера
+                    current_style = style_manager.current_style_name
                     start_point = Point(start_scene_pos.x(), start_scene_pos.y())
-                    line = Line(start_point, end_point)
+                    line = Line(start_point, end_point, style_name=current_style) # <-- Передаем стиль
+                    
                     self.scene.add_object(line)
                     self.start_pos = None
                     self.current_pos = None
-                    self.line_info_changed.emit("")  # Очищаем информацию
+                    self.line_info_changed.emit("")
             elif event.button() == Qt.MouseButton.RightButton and self.start_pos:
-                # Отмена рисования правой кнопкой мыши
                 self.start_pos = None
                 self.current_pos = None
-                self.line_info_changed.emit("")  # Очищаем информацию
+                self.line_info_changed.emit("")
+                
+        # 2. Инструмент УДАЛЕНИЕ
         elif self.delete_tool_action.isChecked():
             if event.button() == Qt.MouseButton.LeftButton and self.highlighted_line:
-                # Удаляем выделенную линию
                 self.scene.remove_object(self.highlighted_line)
                 self.highlighted_line = None
+                
+        # 3. Инструмент ВЫДЕЛЕНИЕ (если активен select_tool_action или никакой другой не активен)
+        elif self.select_tool_action.isChecked() or (not self.pan_tool_active and not self.line_tool_action.isChecked() and not self.delete_tool_action.isChecked()):
+            if event.button() == Qt.MouseButton.LeftButton:
+                clicked_object = self._get_object_at_cursor(event.position())
+                
+                is_ctrl_pressed = event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                
+                if clicked_object:
+                    if is_ctrl_pressed:
+                        # Если нажат Ctrl - инвертируем выделение (добавляем/убираем)
+                        if clicked_object in self.selected_objects:
+                            self.selected_objects.remove(clicked_object)
+                        else:
+                            self.selected_objects.append(clicked_object)
+                    else:
+                        # Обычный клик - сбрасываем всё и выделяем один объект
+                        self.selected_objects = [clicked_object]
+                else:
+                    # Клик по пустому месту - снимаем выделение
+                    if not is_ctrl_pressed:
+                        self.selected_objects = []
+                
+                # Сообщаем всем (в том числе Панели свойств), что выделение изменилось
+                self.selection_changed.emit(self.selected_objects)
+                
         self.update()
 
     def mouseMoveEvent(self, event):
@@ -555,6 +584,7 @@ class CanvasWidget(QWidget):
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_scene_objects(painter)
+        self._draw_selection(painter) # выделение объектов
         self._draw_hover_highlighted_line(painter)  # Рисуем hover подсветку (голубая)
         self._draw_highlighted_line(painter)  # Рисуем delete подсветку (красная)
         self._draw_preview(painter)
@@ -662,28 +692,72 @@ class CanvasWidget(QWidget):
         painter.drawLine(x_axis_start.toPoint(), x_axis_end.toPoint())
 
     def _draw_scene_objects(self, painter: QPainter):
+        """
+        Отрисовывает объекты сцены с учетом их стилей.
+        """
         colors = settings.get("colors") or settings.defaults["colors"]
-        pen = QPen(QColor(colors.get("line_object", "#FFFFFF")), 2)
-        painter.setPen(pen)
+        # Цвет по умолчанию, если вдруг пригодится
+        default_color = QColor(colors.get("line_object", "#FFFFFF"))
+        
+        # Получаем базовую толщину S из менеджера стилей
+        base_width = style_manager.base_width
 
         for obj in self.scene.objects:
             if isinstance(obj, Line):
-                # Пропускаем hover линию - она будет отрисована отдельно голубым
+                # Пропускаем линии, которые рисуются спец. цветом (подсветка/удаление)
                 if obj == self.hover_highlighted_line:
                     continue
-                # Пропускаем выделенную линию - она будет отрисована отдельно красным
                 if obj == self.highlighted_line and self.delete_tool_action.isChecked():
                     continue
-                    
+                
+                # Получаем стиль линии
+                style = style_manager.get_style(obj.style_name)
+                # Создаем перо
+                pen = QPen(default_color)
+                # Вычисляем толщину: Базовая S * Множитель стиля
+                pen_width = base_width * style.width_mult
+                pen.setWidthF(pen_width)
+                # Включаем Cosmetic (толщина не зависит от зума) по тз
+                pen.setCosmetic(True)
+                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                # Применяем паттерн штриховки, если есть
+                if style.pattern:
+                    pen.setStyle(Qt.PenStyle.CustomDashLine)
+                    pen.setDashPattern(style.pattern)
+                else:
+                    pen.setStyle(Qt.PenStyle.SolidLine)
+                # Устанавливаем перо
+                painter.setPen(pen)
+                # Рисуем линию векторно (быстро) метод из QT
                 start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
                 end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
-                points_generator = bresenham(
-                    int(start_screen.x()), int(start_screen.y()),
-                    int(end_screen.x()), int(end_screen.y())
-                )
-                for point in points_generator:
-                    painter.drawPoint(*point)
+                painter.drawLine(start_screen, end_screen)
     
+    def _draw_selection(self, painter: QPainter):
+        """Отрисовывает выделенные объекты поверх основных."""
+        if not self.selected_objects:
+            return
+
+        # Перо для выделения: Оранжевый пунктир, рисуется поверх
+        pen = QPen(QColor("#FFA500")) # Orange
+        pen.setWidth(2)
+        pen.setCosmetic(True)
+        pen.setStyle(Qt.PenStyle.DashLine) 
+
+        painter.setPen(pen)
+        
+        for obj in self.selected_objects:
+            if isinstance(obj, Line):
+                # Для выделения рисуем линию поверх оригинала
+                start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
+                end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
+                painter.drawLine(start_screen, end_screen)
+                
+                # Опционально: Рисуем "ручки" (квадратики) на концах
+                handle_size = 4
+                painter.fillRect(start_screen.x() - handle_size, start_screen.y() - handle_size, handle_size*2, handle_size*2, QColor("#FFA500"))
+                painter.fillRect(end_screen.x() - handle_size, end_screen.y() - handle_size, handle_size*2, handle_size*2, QColor("#FFA500"))
+
     def _draw_preview(self, painter: QPainter):
         if self.start_pos and self.current_pos:
             pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.DashLine)
@@ -811,44 +885,33 @@ class CanvasWidget(QWidget):
             self.update()
     
     def _draw_hover_highlighted_line(self, painter: QPainter):
-        """
-        Отрисовывает линию с hover подсветкой голубым цветом.
-        """
+        """Отрисовывает линию с hover подсветкой голубым цветом."""
         if self.hover_highlighted_line:
-            # Отрисовываем hover линию голубым цветом
             pen = QPen(QColor("#7ACCCC"), 3)  # Голубой цвет, толщина 3
+            pen.setCosmetic(True)           # Корректная толщина при зуме
+            pen.setStyle(Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             
             start_screen = self.map_from_scene(QPointF(self.hover_highlighted_line.start.x, 
                                                         self.hover_highlighted_line.start.y))
             end_screen = self.map_from_scene(QPointF(self.hover_highlighted_line.end.x, 
                                                       self.hover_highlighted_line.end.y))
-            
-            points_generator = bresenham(
-                int(start_screen.x()), int(start_screen.y()),
-                int(end_screen.x()), int(end_screen.y())
-            )
-            for point in points_generator:
-                painter.drawPoint(*point)
+            # Рисуем одной командой вместо цикла Брезенхэма
+            painter.drawLine(start_screen, end_screen)
     
     def _draw_highlighted_line(self, painter: QPainter):
-        """
-        Отрисовывает выделенную линию красным цветом (для режима удаления).
-        """
+        """Отрисовывает выделенную линию красным цветом."""
         if self.highlighted_line and self.delete_tool_action.isChecked():
-            # Отрисовываем выделенную линию красным цветом
-            pen = QPen(QColor("#FF4444"), 3)  # Красный цвет, немного толще
+            pen = QPen(QColor("#FF4444"), 3)
+            pen.setCosmetic(True)
+            pen.setStyle(Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             
-            start_screen = self.map_from_scene(QPointF(self.highlighted_line.start.x, self.highlighted_line.start.y))
-            end_screen = self.map_from_scene(QPointF(self.highlighted_line.end.x, self.highlighted_line.end.y))
-            
-            points_generator = bresenham(
-                int(start_screen.x()), int(start_screen.y()),
-                int(end_screen.x()), int(end_screen.y())
-            )
-            for point in points_generator:
-                painter.drawPoint(*point)
+            start_screen = self.map_from_scene(QPointF(self.highlighted_line.start.x, 
+                                                       self.highlighted_line.start.y))
+            end_screen = self.map_from_scene(QPointF(self.highlighted_line.end.x, 
+                                                     self.highlighted_line.end.y))
+            painter.drawLine(start_screen, end_screen)
     
     def _draw_rotation_indicator(self, painter: QPainter):
         """

@@ -9,18 +9,20 @@ from PySide6.QtCore import Qt
 
 from .core.scene import Scene
 from .core.geometry import Line, Point
+from .core.style_manager import style_manager
 from .canvas_widget import CanvasWidget
 from .theme import get_stylesheet
 from .settings_dialog import SettingsDialog
 from .settings import settings
 from .line_input_panel import LineInputPanel
+from .properties_panel import PropertiesPanel
 from .icon_utils import load_svg_icon
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("shorins CAD")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 1000, 700)
         self.showMaximized() # во весь экран на macOS
 
         # Создаем экземпляр нашей Модели
@@ -30,7 +32,7 @@ class MainWindow(QMainWindow):
         
         # Создаем Представление/Контроллер и передаем ему Модель
         # Теперь line_tool_action и delete_tool_action уже определены
-        self.canvas = CanvasWidget(self.scene, self.line_tool_action, self.delete_tool_action)
+        self.canvas = CanvasWidget(self.scene, self.select_tool_action, self.line_tool_action, self.delete_tool_action)
         self.setCentralWidget(self.canvas)
         
         # Подключаем zoom_fit_action после создания canvas
@@ -38,6 +40,7 @@ class MainWindow(QMainWindow):
 
         self._create_menus()
         self._create_toolbars()
+        self._create_properties_panel()
         self._create_status_bar()
         self._create_line_input_panel()
         
@@ -53,6 +56,7 @@ class MainWindow(QMainWindow):
         self.line_tool_action.toggled.connect(self._update_tool_label)
         self.delete_tool_action.toggled.connect(self._update_tool_label)
         self.pan_tool_action.toggled.connect(self._update_tool_label)
+        self.select_tool_action.toggled.connect(self._update_tool_label)
         
         # Устанавливаем начальное значение метки инструмента
         self._update_tool_label()
@@ -60,16 +64,28 @@ class MainWindow(QMainWindow):
         # Связываем выбор инструмента "линия" с показом/скрытием панели ввода
         self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
 
+        # Связываем выделение с панелью свойств
+        self.canvas.selection_changed.connect(self.properties_panel.update_selection_state)
+        # Связываем выбор стиля с применением его к объектам
+        self.properties_panel.style_selected.connect(self._on_style_selected)
+
     def _create_actions(self):
         # Используем SVG иконки из папки public с белым цветом
         self.new_action = QAction(QIcon.fromTheme("document-new"), "&Новый", self)
         self.open_action = QAction(QIcon.fromTheme("document-open"), "&Открыть...", self)
         self.save_action = QAction(QIcon.fromTheme("document-save"), "&Сохранить", self)
         self.exit_action = QAction(QIcon.fromTheme("application-exit"), "&Выход", self)
+
+        # Инструмент выделения (Стрелка)
+        self.select_tool_action = QAction(QIcon.fromTheme("edit-select"), "Выделение", self)
+        self.select_tool_action.setCheckable(True)
+        self.select_tool_action.setChecked(True) # Делаем активным по умолчанию
+        self.select_tool_action.setToolTip("Выделение объектов (Esc)")
+        self.select_tool_action.setShortcut("Esc")
+        self.select_tool_action.triggered.connect(self._on_select_tool_toggled)
         
         self.line_tool_action = QAction(load_svg_icon("public/line.svg"), "Линия", self)
         self.line_tool_action.setCheckable(True)
-        self.line_tool_action.setChecked(True) # Активен по умолчанию
 
         self.delete_tool_action = QAction(load_svg_icon("public/delete.svg"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
@@ -128,10 +144,12 @@ class MainWindow(QMainWindow):
         
         # Группируем инструменты, чтобы одновременно был активен только один
         tool_group = QActionGroup(self)
+        tool_group.addAction(self.select_tool_action)
         tool_group.addAction(self.line_tool_action)
         tool_group.addAction(self.delete_tool_action)
         tool_group.addAction(self.pan_tool_action)
         
+        edit_toolbar.addAction(self.select_tool_action)
         edit_toolbar.addAction(self.line_tool_action)
         edit_toolbar.addAction(self.delete_tool_action)
         edit_toolbar.addAction(self.pan_tool_action)
@@ -241,6 +259,38 @@ class MainWindow(QMainWindow):
         status_bar.addPermanentWidget(self.rotation_label)
         status_bar.addPermanentWidget(self.tool_label)
     
+    def _on_select_tool_toggled(self, checked):
+        """Обработчик включения инструмента выделения."""
+        if checked:
+            # Скрываем панель ввода координат, если она была открыта для линии
+            if hasattr(self, 'line_input_toolbar'):
+                self.line_input_toolbar.hide()
+
+    def _on_style_selected(self, style_name):
+        """Обработчик выбора стиля в панели свойств."""
+        selected = self.canvas.selected_objects
+        
+        if selected:
+            # Если есть выделенные объекты, меняем их стиль
+            for obj in selected:
+                if isinstance(obj, Line):
+                    obj.style_name = style_name
+            # Уведомляем сцену об изменениях для перерисовки
+            self.scene.scene_changed.emit()
+            # Обновляем панель, чтобы показать, что стиль применился
+            self.properties_panel.update_selection_state(selected)
+        else:
+            # Если ничего не выделено, меняем глобальный стиль для будущих линий
+            style_manager.set_current_style(style_name)
+
+    def _create_properties_panel(self):
+        """Создает панель свойств для выбора стиля линий."""
+        # PropertiesPanel уже является QToolBar, поэтому просто добавляем его
+        self.properties_panel = PropertiesPanel(self)
+        self.properties_panel.setMovable(False)
+        # Добавляем панель свойств в правую часть окна
+        self.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.properties_panel)
+
     def _create_line_input_panel(self):
         """Создает панель ввода координат для линии."""
         # Создаем панель ввода
@@ -292,6 +342,8 @@ class MainWindow(QMainWindow):
             self.tool_label.setText("Инструмент: Удаление")
         elif self.pan_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Панорамирование")
+        elif self.select_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Выделение")
 
     def new_project(self):
         """Очищает сцену и сбрасывает настройки для создания нового проекта."""
