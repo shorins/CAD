@@ -69,6 +69,9 @@ class MainWindow(QMainWindow):
         # Обновляем список стилей при изменении менеджера
         style_manager.style_changed.connect(self._reload_styles_into_combo)
 
+        # === АВТОНАСТРОЙКА ТОЛЩИНЫ (DPI AWARE) ===
+        self._setup_adaptive_line_width()
+
     def _create_actions(self):
         # Используем SVG иконки из папки public с белым цветом
         self.new_action = QAction(QIcon.fromTheme("document-new"), "&Новый", self)
@@ -414,6 +417,25 @@ class MainWindow(QMainWindow):
 
         self.style_combo.blockSignals(False)
 
+    def _setup_adaptive_line_width(self):
+        """Вычисляет и устанавливает базовую толщину линий исходя из DPI экрана."""
+        screen = QApplication.primaryScreen()
+        dpi = screen.logicalDotsPerInch()
+        
+        # Цель: Основная линия ~1.4 мм (ГОСТ: 0.5 - 1.4 мм)
+        target_mm = 1.4
+        
+        # Формула: 1 дюйм = 25.4 мм
+        calc_width = target_mm * (dpi / 25.4)
+        
+        # Ограничиваем: минимум 1.5px (чтобы не исчезла), максимум 6px
+        final_width = max(1.5, min(calc_width, 6.0))
+        
+        print(f"\n\nDPI экрана: {dpi:.1f}. Базовая толщина линии (S): {final_width:.2f}px. В мм: {target_mm:.2f} мм")
+        
+        # Применяем глобально
+        style_manager.set_base_width(final_width)
+    
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
         # map_to_scene уже возвращает координаты в математической системе (Y вверх)

@@ -12,6 +12,7 @@ from .core.math_utils import (distance_point_to_segment_sq, get_distance,
 from .settings import settings
 from .icon_utils import load_svg_icon
 from .core.style_manager import style_manager
+from .core.render_utils import create_wavy_path
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
@@ -720,18 +721,30 @@ class CanvasWidget(QWidget):
                 # Включаем Cosmetic (толщина не зависит от зума) по тз
                 pen.setCosmetic(True)
                 pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-                # Применяем паттерн штриховки, если есть
-                if style.pattern:
-                    pen.setStyle(Qt.PenStyle.CustomDashLine)
-                    pen.setDashPattern(style.pattern)
-                else:
-                    pen.setStyle(Qt.PenStyle.SolidLine)
-                # Устанавливаем перо
-                painter.setPen(pen)
-                # Рисуем линию векторно (быстро) метод из QT
+
                 start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
                 end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
-                painter.drawLine(start_screen, end_screen)
+
+                if style.name == "Сплошная волнистая":
+                    # Используем нашу вынесенную функцию
+                    # Амплитуда зависит от толщины, чтобы выглядело пропорционально
+                    amp = pen_width * 1.5 
+                    path = create_wavy_path(start_screen, end_screen, amplitude=amp, period=10)
+                    
+                    # Для волнистой линии нужен Solid стиль (рисуем сплошной путь)
+                    pen.setStyle(Qt.PenStyle.SolidLine) 
+                    painter.setPen(pen)
+                    painter.drawPath(path)
+                else:
+                    # Стандартная отрисовка (прямая линия + паттерн пунктира)
+                    if style.pattern:
+                        pen.setStyle(Qt.PenStyle.CustomDashLine)
+                        pen.setDashPattern(style.pattern)
+                    else:
+                        pen.setStyle(Qt.PenStyle.SolidLine)
+                    
+                    painter.setPen(pen)
+                    painter.drawLine(start_screen, end_screen)
     
     def _draw_selection(self, painter: QPainter):
         """Отрисовывает выделенные объекты поверх основных."""
