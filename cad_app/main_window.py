@@ -3,9 +3,9 @@
 import sys
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStatusBar, 
-                               QToolBar, QLabel, QFileDialog)
-from PySide6.QtGui import QAction, QIcon, QActionGroup
-from PySide6.QtCore import Qt
+                               QToolBar, QLabel, QFileDialog, QComboBox, QWidget)
+from PySide6.QtGui import QAction, QIcon, QActionGroup, QPixmap, QPainter, QPen, QColor
+from PySide6.QtCore import Qt, QSize
 
 from .core.scene import Scene
 from .core.geometry import Line, Point
@@ -15,7 +15,6 @@ from .theme import get_stylesheet
 from .settings_dialog import SettingsDialog
 from .settings import settings
 from .line_input_panel import LineInputPanel
-from .properties_panel import PropertiesPanel
 from .icon_utils import load_svg_icon
 
 class MainWindow(QMainWindow):
@@ -27,6 +26,8 @@ class MainWindow(QMainWindow):
 
         # Создаем экземпляр нашей Модели
         self.scene = Scene()
+
+        self.style_combo = None
 
         self._create_actions()
         
@@ -40,7 +41,6 @@ class MainWindow(QMainWindow):
 
         self._create_menus()
         self._create_toolbars()
-        self._create_properties_panel()
         self._create_status_bar()
         self._create_line_input_panel()
         
@@ -64,10 +64,10 @@ class MainWindow(QMainWindow):
         # Связываем выбор инструмента "линия" с показом/скрытием панели ввода
         self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
 
-        # Связываем выделение с панелью свойств
-        self.canvas.selection_changed.connect(self.properties_panel.update_selection_state)
-        # Связываем выбор стиля с применением его к объектам
-        self.properties_panel.style_selected.connect(self._on_style_selected)
+        # Связываем выделение с комбобоксом стилей
+        self.canvas.selection_changed.connect(self._update_style_combo_by_selection)
+        # Обновляем список стилей при изменении менеджера
+        style_manager.style_changed.connect(self._reload_styles_into_combo)
 
     def _create_actions(self):
         # Используем SVG иконки из папки public с белым цветом
@@ -166,6 +166,11 @@ class MainWindow(QMainWindow):
         # Переключатель режима построения линии
         edit_toolbar.addSeparator()
         edit_toolbar.addAction(self.polar_mode_action)
+
+        # Комбобокс выбора стиля линии
+        edit_toolbar.addSeparator()
+        style_combo_widget = self._create_style_combo()
+        edit_toolbar.addWidget(style_combo_widget)
         
         # Загружаем текущий режим из настроек
         current_mode = settings.get("line_construction_mode") or "cartesian"
@@ -250,7 +255,7 @@ class MainWindow(QMainWindow):
         # Создаем новые виджеты для отображения масштаба, поворота и инструмента
         self.zoom_label = QLabel("Масштаб: 100%")
         self.rotation_label = QLabel("Поворот: 0°")
-        self.tool_label = QLabel("Инструмент: Линия")
+        self.tool_label = QLabel("Инструмент: Выделение")
         
         # Добавляем виджеты на ПОЛУЧЕННЫЙ объект строки состояния
         status_bar.addPermanentWidget(self.cursor_pos_label)
@@ -267,29 +272,8 @@ class MainWindow(QMainWindow):
                 self.line_input_toolbar.hide()
 
     def _on_style_selected(self, style_name):
-        """Обработчик выбора стиля в панели свойств."""
-        selected = self.canvas.selected_objects
-        
-        if selected:
-            # Если есть выделенные объекты, меняем их стиль
-            for obj in selected:
-                if isinstance(obj, Line):
-                    obj.style_name = style_name
-            # Уведомляем сцену об изменениях для перерисовки
-            self.scene.scene_changed.emit()
-            # Обновляем панель, чтобы показать, что стиль применился
-            self.properties_panel.update_selection_state(selected)
-        else:
-            # Если ничего не выделено, меняем глобальный стиль для будущих линий
-            style_manager.set_current_style(style_name)
-
-    def _create_properties_panel(self):
-        """Создает панель свойств для выбора стиля линий."""
-        # PropertiesPanel уже является QToolBar, поэтому просто добавляем его
-        self.properties_panel = PropertiesPanel(self)
-        self.properties_panel.setMovable(False)
-        # Добавляем панель свойств в правую часть окна
-        self.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.properties_panel)
+        """Обработчик выбора стиля (для обратной совместимости)."""
+        self._apply_style_selection(style_name)
 
     def _create_line_input_panel(self):
         """Создает панель ввода координат для линии."""
@@ -311,6 +295,124 @@ class MainWindow(QMainWindow):
             self.line_input_toolbar.show()
         else:
             self.line_input_toolbar.hide()
+
+    def _create_style_combo(self) -> QWidget:
+        """
+        Создает выпадающий список стилей линий для верхней панели инструментов.
+        """
+        self.style_combo = QComboBox()
+        self.style_combo.setMinimumWidth(200)
+        self.style_combo.setIconSize(QSize(64, 16))
+        self._reload_styles_into_combo()
+        self.style_combo.activated.connect(self._on_style_combo_activated)
+        return self.style_combo
+
+    def _reload_styles_into_combo(self):
+        """Перезаполняет комбобокс из style_manager, сохраняя выбор."""
+        if not self.style_combo:
+            return
+
+        current_data = self.style_combo.currentData()
+        self.style_combo.blockSignals(True)
+        self.style_combo.clear()
+
+        # Заполняем стилями
+        for name, style in style_manager.styles.items():
+            icon = self._create_line_icon(style)
+            self.style_combo.addItem(icon, name, name)
+
+        # Ставим текущий стиль (глобальный) по умолчанию
+        default_style = style_manager.current_style_name
+        index = self.style_combo.findData(current_data or default_style)
+        if index < 0:
+            index = self.style_combo.findData(default_style)
+        if index >= 0:
+            self.style_combo.setCurrentIndex(index)
+
+        self.style_combo.blockSignals(False)
+
+    def _create_line_icon(self, style, width=64, height=16) -> QIcon:
+        """Локальное создание иконки превью стиля (как в PropertiesPanel)."""
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        color = QColor("#DDFFFFFF")
+
+        pen = QPen(color)
+        pen.setWidthF(2)
+
+        if style.pattern:
+            pen.setStyle(Qt.PenStyle.CustomDashLine)
+            pen.setDashPattern(style.pattern)
+        else:
+            pen.setStyle(Qt.PenStyle.SolidLine)
+
+        painter.setPen(pen)
+        painter.drawLine(0, height // 2, width, height // 2)
+        painter.end()
+
+        return QIcon(pixmap)
+
+    def _on_style_combo_activated(self, index):
+        """Обработчик выбора стиля из комбобокса."""
+        style_name = self.style_combo.itemData(index)
+        # Игнорируем спец-значение смешанных стилей
+        if not style_name or style_name == "__MIXED__":
+            return
+        self._apply_style_selection(style_name)
+
+    def _apply_style_selection(self, style_name: str):
+        """
+        Применяет выбранный стиль: к выделенным объектам или глобально.
+        """
+        selected = self.canvas.selected_objects
+
+        if selected:
+            for obj in selected:
+                if isinstance(obj, Line):
+                    obj.style_name = style_name
+            self.scene.scene_changed.emit()
+            # Обновляем комбобокс после применения, чтобы отображать текущий стиль выделения
+            self._update_style_combo_by_selection(selected)
+        else:
+            style_manager.set_current_style(style_name)
+            # Когда ничего не выделено, просто показываем глобальный стиль
+            index = self.style_combo.findData(style_name)
+            if index >= 0:
+                self.style_combo.setCurrentIndex(index)
+
+    def _update_style_combo_by_selection(self, selected_objects):
+        """
+        Синхронизирует комбобокс с текущим выделением.
+        """
+        if not self.style_combo:
+            return
+
+        self.style_combo.blockSignals(True)
+
+        if not selected_objects:
+            # Нет выделения -> показываем глобальный стиль
+            style_name = style_manager.current_style_name
+            index = self.style_combo.findData(style_name)
+            if index >= 0:
+                self.style_combo.setCurrentIndex(index)
+        else:
+            first_style = selected_objects[0].style_name
+            all_same = all(obj.style_name == first_style for obj in selected_objects if isinstance(obj, Line))
+
+            if all_same:
+                index = self.style_combo.findData(first_style)
+                if index >= 0:
+                    self.style_combo.setCurrentIndex(index)
+            else:
+                mixed_index = self.style_combo.findData("__MIXED__")
+                if mixed_index < 0:
+                    self.style_combo.insertItem(0, "Разные стили", "__MIXED__")
+                    mixed_index = 0
+                self.style_combo.setCurrentIndex(mixed_index)
+
+        self.style_combo.blockSignals(False)
 
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
