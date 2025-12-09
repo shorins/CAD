@@ -65,6 +65,46 @@ class StyleManager(QObject):
         # Инициализируем стандартные стили ГОСТ
         self._init_default_styles()
 
+    def to_dict(self):
+        """Сериализует состояние менеджера стилей."""
+        return {
+            "base_s_mm": self.base_s_mm,
+            # Сохраняем все стили. Если в будущем добавим создание своих стилей,
+            # это позволит их тоже сохранять циклом
+            "styles": [s.to_dict() for s in self.styles.values()]
+        }
+
+    def load_from_dict(self, data):
+        """Восстанавливает состояние из словаря."""
+        if not data:
+            return
+
+        # 1. Восстанавливаем глобальную толщину
+        if "base_s_mm" in data:
+            self.base_s_mm = float(data["base_s_mm"])
+            # пересчитаем dpi заново
+            from PySide6.QtWidgets import QApplication
+            screen = QApplication.primaryScreen()
+            if screen:
+                dpi = screen.logicalDotsPerInch()
+                self.set_base_width_px_from_dpi(dpi)
+
+        # 2. Восстанавливаем стили
+        if "styles" in data:
+            for style_data in data["styles"]:
+                # Создаем объект стиля из данных
+                loaded_style = LineStyle.from_dict(style_data)
+                
+                # Обновляем существующий стиль или добавляем новый
+                # (params тоже загрузятся внутри from_dict)
+                self.styles[loaded_style.name] = loaded_style
+
+        # 3. Пересчитываем паттерны (Qt коэффициенты) на основе загруженных мм
+        self._recalculate_all_patterns()
+        
+        # Уведомляем всех об изменениях
+        self.style_changed.emit()
+
     def set_base_s_mm(self, mm: float):
         """Изменяет глобальную S (в мм) и пересчитывает паттерны."""
         self.base_s_mm = mm
@@ -229,7 +269,7 @@ class StyleManager(QObject):
     def set_base_width(self, width: float):
         """Устанавливает базовую толщину линий S."""
         if 0.5 <= width <= 50.0: # Разумные пределы в пикселях
-            self.base_width = width
+            self.base_width_px = width
             self.style_changed.emit()
 
     @property

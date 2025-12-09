@@ -486,8 +486,9 @@ class MainWindow(QMainWindow):
         if file_path:
             # Готовим данные для сохранения
             project_data = {
-                "version": "1.0",
+                "version": "1.1",
                 "settings": settings.settings,
+                "style_manager": style_manager.to_dict(),
                 "view_state": self.canvas.get_view_state(),
                 "objects": [obj.to_dict() for obj in self.scene.objects]
             }
@@ -518,6 +519,14 @@ class MainWindow(QMainWindow):
                 # Перед загрузкой очищаем текущую сцену и сбрасываем настройки
                 self.scene.clear()
                 settings.reset_to_defaults()
+
+                if "style_manager" in project_data:
+                    style_manager.load_from_dict(project_data["style_manager"])
+                else:
+                    # Если открываем старый проект без стилей - сбрасываем на дефолт
+                    # (можно добавить метод reset_to_defaults в StyleManager, 
+                    # по сути это вызов _init_default_styles)
+                    style_manager._init_default_styles()
 
                 # Загружаем настройки проекта, если они есть
                 if "settings" in project_data:
