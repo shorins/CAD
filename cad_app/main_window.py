@@ -130,12 +130,16 @@ class MainWindow(QMainWindow):
         self.settings_action.triggered.connect(self.open_settings)
         # Note: zoom_fit_action will be connected after canvas is created
 
+        self.style_manager_action = QAction("Менеджер стилей...", self)
+        self.style_manager_action.triggered.connect(self.open_style_manager)
+
     def _create_menus(self):
         file_menu = self.menuBar().addMenu("&Файл")
         file_menu.addAction(self.new_action)
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.save_action)
         file_menu.addSeparator()
+        file_menu.addAction(self.style_manager_action)
         file_menu.addAction(self.settings_action)
         file_menu.addAction(self.exit_action)
         self.exit_action.triggered.connect(self.close)
@@ -418,23 +422,17 @@ class MainWindow(QMainWindow):
         self.style_combo.blockSignals(False)
 
     def _setup_adaptive_line_width(self):
-        """Вычисляет и устанавливает базовую толщину линий исходя из DPI экрана."""
         screen = QApplication.primaryScreen()
         dpi = screen.logicalDotsPerInch()
         
-        # Цель: Основная линия ~1.4 мм (ГОСТ: 0.5 - 1.4 мм)
-        target_mm = 1.4
+        # Просто передаем DPI в менеджер. 
+        # Менеджер сам возьмет свою дефолтную base_s_mm (0.8) и посчитает пиксели.
+        style_manager.set_base_width_px_from_dpi(dpi)
         
-        # Формула: 1 дюйм = 25.4 мм
-        calc_width = target_mm * (dpi / 25.4)
+        # И сразу пересчитаем паттерны, так как пиксели обновились
+        style_manager._recalculate_all_patterns()
         
-        # Ограничиваем: минимум 1.5px (чтобы не исчезла), максимум 6px
-        final_width = max(1.5, min(calc_width, 6.0))
-        
-        print(f"\n\nDPI экрана: {dpi:.1f}. Базовая толщина линии (S): {final_width:.2f}px. В мм: {target_mm:.2f} мм")
-        
-        # Применяем глобально
-        style_manager.set_base_width(final_width)
+        print(f"DPI: {dpi}. S_mm: {style_manager.base_s_mm}. S_px: {style_manager.base_width_px}")
     
     def update_cursor_pos_label(self, pos):
         # Слот, который обновляет текст с координатами
@@ -550,6 +548,11 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dialog = SettingsDialog(self)
         dialog.exec() # exec() открывает модальное окно
+
+    def open_style_manager(self):
+        from .style_editor_dialog import StyleEditorDialog
+        dialog = StyleEditorDialog(self)
+        dialog.exec()
 
 def run():
     app = QApplication(sys.argv)
