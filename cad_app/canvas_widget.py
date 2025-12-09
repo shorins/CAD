@@ -12,7 +12,7 @@ from .core.math_utils import (distance_point_to_segment_sq, get_distance,
 from .settings import settings
 from .icon_utils import load_svg_icon
 from .core.style_manager import style_manager
-from .core.render_utils import create_wavy_path
+from .core.render_utils import create_wavy_path, create_zigzag_path
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
@@ -733,6 +733,23 @@ class CanvasWidget(QWidget):
                     
                     # Для волнистой линии нужен Solid стиль (рисуем сплошной путь)
                     pen.setStyle(Qt.PenStyle.SolidLine) 
+                    painter.setPen(pen)
+                    painter.drawPath(path)
+                elif style.name == "Сплошная с изломами":
+                    # Высота излома зависит от толщины (чтобы было видно)
+                    # zigzag_height ~ 4-5 мм визуально, или пропорционально S
+                    # Сделаем высоту ~10px и ширину ~15px для наглядности (можно привязать к DPI, но пока фикс)
+                    z_height = max(5.0, pen_width * 3.0) 
+                    z_width = z_height * 0.8
+                    
+                    # Период появления изломов. Для длинных линий - реже.
+                    # Пусть будет каждые 150 пикселей экрана (примерно 3-4 см)
+                    path = create_zigzag_path(start_screen, end_screen, 
+                                            zigzag_height=z_height, 
+                                            zigzag_width=z_width, 
+                                            period=150)
+                    
+                    pen.setStyle(Qt.PenStyle.SolidLine)
                     painter.setPen(pen)
                     painter.drawPath(path)
                 else:
