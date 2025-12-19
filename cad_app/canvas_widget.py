@@ -525,7 +525,9 @@ class CanvasWidget(QWidget):
             
             if self.start_pos is None:
                 # Первый клик - начало построения
-                self.start_pos = event.position()
+                # Если сработала привязка, обновляем self.start_pos на экранную координату привязки
+                # чтобы последующие вычисления map_to_scene давали точную координату привязки
+                self.start_pos = self.map_from_scene(click_scene_pos)
                 self.current_pos = self.start_pos
                 
                 # Для методов с 3+ точками - сохраняем первую точку
@@ -2291,10 +2293,17 @@ class CanvasWidget(QWidget):
         scene_pos = self.map_to_scene(screen_pos)
         tolerance = snap_manager.snap_radius / self.zoom_factor
         
+        # Определяем reference_point если мы в процессе построения (есть start_pos)
+        reference_point = None
+        if self.start_pos:
+            start_scene_pos = self.map_to_scene(self.start_pos)
+            reference_point = Point(start_scene_pos.x(), start_scene_pos.y())
+        
         snap_point = snap_manager.find_snap(
             scene_pos.x(), scene_pos.y(),
             self.scene.objects,
-            tolerance
+            tolerance,
+            reference_point=reference_point
         )
         
         # Обновляем только если изменилось
