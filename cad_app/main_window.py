@@ -19,6 +19,11 @@ from .settings_dialog import SettingsDialog
 from .settings import settings
 from .line_input_panel import LineInputPanel
 from .circle_input_panel import CircleInputPanel
+from .arc_input_panel import ArcInputPanel
+from .rectangle_input_panel import RectangleInputPanel
+from .ellipse_input_panel import EllipseInputPanel
+from .polygon_input_panel import PolygonInputPanel
+from .spline_input_panel import SplineInputPanel
 from .icon_utils import load_svg_icon
 
 class MainWindow(QMainWindow):
@@ -86,6 +91,11 @@ class MainWindow(QMainWindow):
         # Связываем выбор инструментов с показом/скрытием панелей ввода
         self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
         self.circle_tool_action.toggled.connect(self._on_circle_tool_toggled)
+        self.arc_tool_action.toggled.connect(self._on_arc_tool_toggled)
+        self.rectangle_tool_action.toggled.connect(self._on_tool_toggled)
+        self.ellipse_tool_action.toggled.connect(self._on_tool_toggled)
+        self.polygon_tool_action.toggled.connect(self._on_tool_toggled)
+        self.spline_tool_action.toggled.connect(self._on_tool_toggled)
 
         # Связываем выделение с комбобоксом стилей
         self.canvas.selection_changed.connect(self._update_style_combo_by_selection)
@@ -281,19 +291,27 @@ class MainWindow(QMainWindow):
     def _update_input_panels_visibility(self):
         """Обновляет видимость панелей ввода в зависимости от активного инструмента."""
         # Скрываем все панели
-        if hasattr(self, 'line_input_toolbar'):
-            self.line_input_toolbar.hide()
-        if hasattr(self, 'circle_input_toolbar'):
-            self.circle_input_toolbar.hide()
+        for toolbar_name in ['line_input_toolbar', 'circle_input_toolbar', 'arc_input_toolbar',
+                            'rectangle_input_toolbar', 'ellipse_input_toolbar', 
+                            'polygon_input_toolbar', 'spline_input_toolbar']:
+            if hasattr(self, toolbar_name):
+                getattr(self, toolbar_name).hide()
         
         # Показываем панель для активного инструмента
-        if self.line_tool_action.isChecked():
-            if hasattr(self, 'line_input_toolbar'):
-                self.line_input_toolbar.show()
-        elif self.circle_tool_action.isChecked():
-            if hasattr(self, 'circle_input_toolbar'):
-                self.circle_input_toolbar.show()
-        # TODO: добавить панели для других примитивов
+        if self.line_tool_action.isChecked() and hasattr(self, 'line_input_toolbar'):
+            self.line_input_toolbar.show()
+        elif self.circle_tool_action.isChecked() and hasattr(self, 'circle_input_toolbar'):
+            self.circle_input_toolbar.show()
+        elif self.arc_tool_action.isChecked() and hasattr(self, 'arc_input_toolbar'):
+            self.arc_input_toolbar.show()
+        elif self.rectangle_tool_action.isChecked() and hasattr(self, 'rectangle_input_toolbar'):
+            self.rectangle_input_toolbar.show()
+        elif self.ellipse_tool_action.isChecked() and hasattr(self, 'ellipse_input_toolbar'):
+            self.ellipse_input_toolbar.show()
+        elif self.polygon_tool_action.isChecked() and hasattr(self, 'polygon_input_toolbar'):
+            self.polygon_input_toolbar.show()
+        elif self.spline_tool_action.isChecked() and hasattr(self, 'spline_input_toolbar'):
+            self.spline_input_toolbar.show()
     
     def _on_line_tool_toggled(self, checked):
         """Обработчик переключения инструмента 'линия'."""
@@ -305,6 +323,22 @@ class MainWindow(QMainWindow):
     
     def _on_circle_tool_toggled(self, checked):
         """Обработчик переключения инструмента 'окружность'."""
+        if checked:
+            self.delete_tool_action.setChecked(False)
+            self.pan_tool_action.setChecked(False)
+            self.canvas.set_pan_tool_active(False)
+        self._update_input_panels_visibility()
+    
+    def _on_arc_tool_toggled(self, checked):
+        """Обработчик переключения инструмента 'дуга'."""
+        if checked:
+            self.delete_tool_action.setChecked(False)
+            self.pan_tool_action.setChecked(False)
+            self.canvas.set_pan_tool_active(False)
+        self._update_input_panels_visibility()
+    
+    def _on_tool_toggled(self, checked):
+        """Универсальный обработчик переключения инструмента рисования."""
         if checked:
             self.delete_tool_action.setChecked(False)
             self.pan_tool_action.setChecked(False)
@@ -345,6 +379,30 @@ class MainWindow(QMainWindow):
     def _on_circle_build_requested(self, circle: Circle):
         """Обработчик запроса на построение окружности из панели ввода."""
         self.scene.add_object(circle)
+    
+    def _on_arc_build_requested(self, arc: Arc):
+        """Обработчик запроса на построение дуги из панели ввода."""
+        self.scene.add_object(arc)
+    
+    def _on_rectangle_build_requested(self, rect: Rectangle):
+        """Обработчик запроса на построение прямоугольника из панели ввода."""
+        self.scene.add_object(rect)
+    
+    def _on_ellipse_build_requested(self, ellipse: Ellipse):
+        """Обработчик запроса на построение эллипса из панели ввода."""
+        self.scene.add_object(ellipse)
+    
+    def _on_polygon_build_requested(self, polygon: Polygon):
+        """Обработчик запроса на построение многоугольника из панели ввода."""
+        self.scene.add_object(polygon)
+    
+    def _on_spline_build_requested(self, spline: Spline):
+        """Обработчик запроса на построение сплайна из панели ввода."""
+        self.scene.add_object(spline)
+    
+    def _on_spline_finish_requested(self):
+        """Обработчик завершения сплайна."""
+        self.canvas.finish_spline()
 
     def _create_status_bar(self):
         # Строка состояния
@@ -405,8 +463,58 @@ class MainWindow(QMainWindow):
         self.circle_input_toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.circle_input_toolbar)
         
-        # Передаём ссылку на панель окружности в canvas для получения метода построения
+        # Создаём панель ввода для дуги
+        self.arc_input_panel = ArcInputPanel(self)
+        self.arc_input_panel.arc_requested.connect(self._on_arc_build_requested)
+        
+        self.arc_input_toolbar = QToolBar("Ввод параметров дуги")
+        self.arc_input_toolbar.addWidget(self.arc_input_panel)
+        self.arc_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.arc_input_toolbar)
+        
+        # Создаём панель ввода для прямоугольника
+        self.rectangle_input_panel = RectangleInputPanel(self)
+        self.rectangle_input_panel.rectangle_requested.connect(self._on_rectangle_build_requested)
+        
+        self.rectangle_input_toolbar = QToolBar("Ввод параметров прямоугольника")
+        self.rectangle_input_toolbar.addWidget(self.rectangle_input_panel)
+        self.rectangle_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.rectangle_input_toolbar)
+        
+        # Создаём панель ввода для эллипса
+        self.ellipse_input_panel = EllipseInputPanel(self)
+        self.ellipse_input_panel.ellipse_requested.connect(self._on_ellipse_build_requested)
+        
+        self.ellipse_input_toolbar = QToolBar("Ввод параметров эллипса")
+        self.ellipse_input_toolbar.addWidget(self.ellipse_input_panel)
+        self.ellipse_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.ellipse_input_toolbar)
+        
+        # Создаём панель ввода для многоугольника
+        self.polygon_input_panel = PolygonInputPanel(self)
+        self.polygon_input_panel.polygon_requested.connect(self._on_polygon_build_requested)
+        
+        self.polygon_input_toolbar = QToolBar("Ввод параметров многоугольника")
+        self.polygon_input_toolbar.addWidget(self.polygon_input_panel)
+        self.polygon_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.polygon_input_toolbar)
+        
+        # Создаём панель ввода для сплайна
+        self.spline_input_panel = SplineInputPanel(self)
+        self.spline_input_panel.spline_finish_requested.connect(self._on_spline_finish_requested)
+        
+        self.spline_input_toolbar = QToolBar("Ввод параметров сплайна")
+        self.spline_input_toolbar.addWidget(self.spline_input_panel)
+        self.spline_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.spline_input_toolbar)
+        
+        # Передаём ссылки на панели в canvas для получения метода построения
         self.canvas.circle_input_panel = self.circle_input_panel
+        self.canvas.arc_input_panel = self.arc_input_panel
+        self.canvas.rectangle_input_panel = self.rectangle_input_panel
+        self.canvas.ellipse_input_panel = self.ellipse_input_panel
+        self.canvas.polygon_input_panel = self.polygon_input_panel
+        self.canvas.spline_input_panel = self.spline_input_panel
         
         # Показываем панель для активного инструмента
         self._update_input_panels_visibility()

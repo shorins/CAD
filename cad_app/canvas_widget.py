@@ -127,6 +127,11 @@ class CanvasWidget(QWidget):
         
         # Ссылки на панели ввода (устанавливаются из MainWindow)
         self.circle_input_panel = None
+        self.arc_input_panel = None
+        self.rectangle_input_panel = None
+        self.ellipse_input_panel = None
+        self.polygon_input_panel = None
+        self.spline_input_panel = None
         
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
         
@@ -159,6 +164,26 @@ class CanvasWidget(QWidget):
     def is_drawing_tool_active(self) -> bool:
         """Проверяет, активен ли какой-либо инструмент рисования."""
         return self.get_active_drawing_tool() is not None
+    
+    def finish_spline(self):
+        """Завершает построение текущего сплайна."""
+        from .core.style_manager import style_manager
+        
+        if hasattr(self, '_spline_points') and len(self._spline_points) >= 2:
+            current_style = style_manager.get_current_style().name
+            obj = Spline(self._spline_points, style_name=current_style)
+            self.scene.add_object(obj)
+        
+        # Сбрасываем состояние
+        self._spline_points = []
+        self.start_pos = None
+        self.current_pos = None
+        
+        # Обновляем панель
+        if self.spline_input_panel:
+            self.spline_input_panel.reset()
+        
+        self.update()
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -505,6 +530,18 @@ class CanvasWidget(QWidget):
                     if circle_method == "three_points":
                         self.construction_points = [Point(click_scene_pos.x(), click_scene_pos.y())]
                 
+                elif active_tool == 'arc':
+                    arc_method = "three_points"
+                    if self.arc_input_panel:
+                        arc_method = self.arc_input_panel.get_current_method()
+                    if arc_method == "three_points":
+                        # Для three_points: первая точка = начало дуги
+                        self.construction_points = [Point(click_scene_pos.x(), click_scene_pos.y())]
+                    elif arc_method == "center_angles":
+                        # Для center_angles: первая точка = центр
+                        self._arc_center = Point(click_scene_pos.x(), click_scene_pos.y())
+                        self.construction_points = []
+                
                 self._update_line_info()
             else:
                 # Второй клик - завершение построения
@@ -570,55 +607,163 @@ class CanvasWidget(QWidget):
                             self.construction_points = []
                 
                 elif active_tool == 'rectangle':
-                    # Прямоугольник: два угла
-                    p1 = Point(start_scene_pos.x(), start_scene_pos.y())
-                    p2 = Point(click_scene_pos.x(), click_scene_pos.y())
-                    if p1.x != p2.x and p1.y != p2.y:
-                        obj = Rectangle(p1, p2, style_name=current_style)
-                        self.scene.add_object(obj)
+                    # Получаем метод построения из панели
+                    rect_method = "two_points"
+                    if self.rectangle_input_panel:
+                        rect_method = self.rectangle_input_panel.get_current_method()
+                    
+                    click_point = Point(click_scene_pos.x(), click_scene_pos.y())
+                    
+                    if rect_method == "two_points":
+                        # Две противоположные точки
+                        p1 = Point(start_scene_pos.x(), start_scene_pos.y())
+                        if p1.x != click_point.x and p1.y != click_point.y:
+                            obj = Rectangle(p1, click_point, style_name=current_style)
+                            self.scene.add_object(obj)
+                    
+                    elif rect_method == "center_size":
+                        # Центр + размер (расстояние до курсора = полуширина/полувысота)
+                        center = Point(start_scene_pos.x(), start_scene_pos.y())
+                        half_w = abs(click_point.x - center.x)
+                        half_h = abs(click_point.y - center.y)
+                        if half_w > 0 and half_h > 0:
+                            p1 = Point(center.x - half_w, center.y - half_h)
+                            p2 = Point(center.x + half_w, center.y + half_h)
+                            obj = Rectangle(p1, p2, style_name=current_style)
+                            self.scene.add_object(obj)
+                    
+                    elif rect_method == "point_size":
+                        # Точка + размер (курсор определяет размеры)
+                        p1 = Point(start_scene_pos.x(), start_scene_pos.y())
+                        width = click_point.x - p1.x
+                        height = click_point.y - p1.y
+                        if width != 0 and height != 0:
+                            p2 = Point(p1.x + width, p1.y + height)
+                            obj = Rectangle(p1, p2, style_name=current_style)
+                            self.scene.add_object(obj)
                 
                 elif active_tool == 'ellipse':
-                    # Эллипс: center + радиусы определяются по смещению
+                    # Получаем метод построения из панели
+                    ellipse_method = "center_radii"
+                    if self.ellipse_input_panel:
+                        ellipse_method = self.ellipse_input_panel.get_current_method()
+                    
                     center = Point(start_scene_pos.x(), start_scene_pos.y())
-                    radius_x = abs(click_scene_pos.x() - center.x)
-                    radius_y = abs(click_scene_pos.y() - center.y)
-                    if radius_x > 0 and radius_y > 0:
-                        obj = Ellipse(center, radius_x, radius_y, style_name=current_style)
-                        self.scene.add_object(obj)
+                    
+                    if ellipse_method == "center_radii":
+                        # Центр + радиусы определяются по смещению курсора
+                        radius_x = abs(click_scene_pos.x() - center.x)
+                        radius_y = abs(click_scene_pos.y() - center.y)
+                        if radius_x > 0 and radius_y > 0:
+                            obj = Ellipse(center, radius_x, radius_y, style_name=current_style)
+                            self.scene.add_object(obj)
+                    
+                    elif ellipse_method == "center_axes":
+                        # Центр и точки на осях: первый клик = X ось, второй = Y ось
+                        if len(self.construction_points) == 0:
+                            # Сохраняем радиус X
+                            radius_x = abs(click_scene_pos.x() - center.x)
+                            if radius_x > 0:
+                                self._ellipse_radius_x = radius_x
+                                self.construction_points.append(Point(click_scene_pos.x(), click_scene_pos.y()))
+                                self.start_pos = event.position()
+                                self.update()
+                                return
+                        else:
+                            # Второй клик = радиус Y
+                            radius_y = abs(click_scene_pos.y() - center.y)
+                            if radius_y > 0:
+                                obj = Ellipse(center, self._ellipse_radius_x, radius_y, style_name=current_style)
+                                self.scene.add_object(obj)
+                                self.construction_points = []
                 
                 elif active_tool == 'polygon':
                     # Многоугольник: center + radius
                     center = Point(start_scene_pos.x(), start_scene_pos.y())
                     radius = center.distance_to(Point(click_scene_pos.x(), click_scene_pos.y()))
                     if radius > 0:
-                        # По умолчанию 6 сторон (можно будет настроить через панель свойств)
-                        obj = Polygon(center, radius, num_sides=6, style_name=current_style)
+                        # Получаем количество сторон из панели ввода
+                        num_sides = 6
+                        if self.polygon_input_panel:
+                            num_sides = self.polygon_input_panel.get_num_sides()
+                        obj = Polygon(center, radius, num_sides=num_sides, style_name=current_style)
                         self.scene.add_object(obj)
                 
                 elif active_tool == 'arc':
-                    # Дуга: нужны 3 точки. Используем промежуточную точку.
-                    # Первый клик = центр, второй = начальная точка на дуге
-                    # Третий клик (при следующем вызове) = конечная точка
-                    # Пока упрощённо: center + radius + 90 градусов
-                    center = Point(start_scene_pos.x(), start_scene_pos.y())
-                    end_pt = Point(click_scene_pos.x(), click_scene_pos.y())
-                    radius = center.distance_to(end_pt)
-                    if radius > 0:
+                    # Получаем метод построения из панели
+                    arc_method = "three_points"
+                    if self.arc_input_panel:
+                        arc_method = self.arc_input_panel.get_current_method()
+                    
+                    click_point = Point(click_scene_pos.x(), click_scene_pos.y())
+                    
+                    if arc_method == "three_points":
+                        # Три точки: накапливаем
+                        self.construction_points.append(click_point)
+                        
+                        if len(self.construction_points) < 3:
+                            # Ещё не все точки
+                            self.start_pos = event.position()
+                            self.update()
+                            return  # Не сбрасываем start_pos
+                        else:
+                            # Все 3 точки собраны
+                            p1, p2, p3 = self.construction_points
+                            arc = Arc.from_three_points(p1, p2, p3, style_name=current_style)
+                            if arc:
+                                self.scene.add_object(arc)
+                            else:
+                                print("Точки коллинеарны, невозможно построить дугу")
+                            self.construction_points = []
+                    
+                    elif arc_method == "center_angles":
+                        # Центр и углы:
+                        # Первый клик = центр (уже сохранён в _arc_center)
+                        # Второй клик = точка на окружности (радиус + начальный угол)
+                        # Третий клик = конечная точка (конечный угол)
+                        
+                        if not hasattr(self, '_arc_center'):
+                            return
+                        
+                        center = self._arc_center
+                        radius = center.distance_to(click_point)
+                        
                         import math
-                        start_angle = math.degrees(math.atan2(
-                            end_pt.y - center.y, end_pt.x - center.x
+                        # Вычисляем угол от центра к точке клика
+                        angle = math.degrees(math.atan2(
+                            click_point.y - center.y, click_point.x - center.x
                         ))
-                        # По умолчанию 90 градусов (можно будет настроить)
-                        obj = Arc(center, radius, start_angle, 90, style_name=current_style)
-                        self.scene.add_object(obj)
+                        
+                        if len(self.construction_points) == 0:
+                            # Второй клик - сохраняем начальный угол и радиус
+                            self.construction_points.append(click_point)
+                            self._arc_start_angle = angle
+                            self._arc_radius = radius
+                            self.start_pos = event.position()
+                            self.update()
+                            return
+                        else:
+                            # Третий клик - создаём дугу
+                            start_angle = self._arc_start_angle
+                            end_angle = angle
+                            arc = Arc.from_center_and_angles(
+                                self._arc_center,
+                                self._arc_radius, start_angle, end_angle,
+                                style_name=current_style
+                            )
+                            self.scene.add_object(arc)
+                            self.construction_points = []
                 
                 elif active_tool == 'spline':
-                    # Сплайн: накапливаем точки. Завершение по двойному клику или ПКМ
-                    # Добавляем точку в текущий сплайн
+                    # Сплайн: накапливаем точки. Завершение по ПКМ или Enter
                     if not hasattr(self, '_spline_points'):
                         self._spline_points = []
                     
                     self._spline_points.append(Point(click_scene_pos.x(), click_scene_pos.y()))
+                    
+                    # Обновляем счётчик точек в панели
+                    if self.spline_input_panel:
+                        self.spline_input_panel.update_points_count(len(self._spline_points))
                     
                     # Не сбрасываем start_pos для сплайна - продолжаем добавлять точки
                     self.start_pos = event.position()  # Обновляем для preview
@@ -644,6 +789,19 @@ class CanvasWidget(QWidget):
             self.line_info_changed.emit("")
             if hasattr(self, '_spline_points'):
                 self._spline_points = []
+            # Сбрасываем атрибуты дуги
+            if hasattr(self, '_arc_center'):
+                delattr(self, '_arc_center')
+            if hasattr(self, '_arc_start_angle'):
+                delattr(self, '_arc_start_angle')
+            if hasattr(self, '_arc_radius'):
+                delattr(self, '_arc_radius')
+            # Сбрасываем атрибуты эллипса
+            if hasattr(self, '_ellipse_radius_x'):
+                delattr(self, '_ellipse_radius_x')
+            # Обновляем панель сплайна
+            if self.spline_input_panel:
+                self.spline_input_panel.reset()
                 
         # 2. Инструмент УДАЛЕНИЕ
         elif self.delete_tool_action.isChecked():
@@ -1236,24 +1394,73 @@ class CanvasWidget(QWidget):
                                 painter.drawLine(p1_screen.toPoint(), p2_screen.toPoint())
         
         elif active_tool == 'rectangle':
-            # Прямоугольник: два угла
-            x1, y1 = self.start_pos.x(), self.start_pos.y()
-            x2, y2 = self.current_pos.x(), self.current_pos.y()
-            rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-            painter.drawRect(rect)
+            # Получаем метод построения
+            rect_method = "two_points"
+            if self.rectangle_input_panel:
+                rect_method = self.rectangle_input_panel.get_current_method()
+            
+            if rect_method == "two_points" or rect_method == "point_size":
+                # Две противоположные точки или точка+размер
+                x1, y1 = self.start_pos.x(), self.start_pos.y()
+                x2, y2 = self.current_pos.x(), self.current_pos.y()
+                rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+                painter.drawRect(rect)
+            
+            elif rect_method == "center_size":
+                # Центр + размер
+                cx, cy = self.start_pos.x(), self.start_pos.y()
+                half_w = abs(self.current_pos.x() - cx)
+                half_h = abs(self.current_pos.y() - cy)
+                rect = QRectF(cx - half_w, cy - half_h, half_w * 2, half_h * 2)
+                painter.drawRect(rect)
+                # Рисуем центр
+                painter.drawEllipse(self.start_pos, 3, 3)
         
         elif active_tool == 'ellipse':
-            # Эллипс: start = центр, current определяет радиусы
+            # Получаем метод построения
+            ellipse_method = "center_radii"
+            if self.ellipse_input_panel:
+                ellipse_method = self.ellipse_input_panel.get_current_method()
+            
             center_screen = self.start_pos
-            radius_x = abs(self.current_pos.x() - self.start_pos.x())
-            radius_y = abs(self.current_pos.y() - self.start_pos.y())
-            rect = QRectF(
-                center_screen.x() - radius_x,
-                center_screen.y() - radius_y,
-                radius_x * 2,
-                radius_y * 2
-            )
-            painter.drawEllipse(rect)
+            
+            if ellipse_method == "center_radii":
+                # Эллипс: start = центр, current определяет радиусы
+                radius_x = abs(self.current_pos.x() - center_screen.x())
+                radius_y = abs(self.current_pos.y() - center_screen.y())
+                rect = QRectF(
+                    center_screen.x() - radius_x,
+                    center_screen.y() - radius_y,
+                    radius_x * 2,
+                    radius_y * 2
+                )
+                painter.drawEllipse(rect)
+            
+            elif ellipse_method == "center_axes":
+                # Центр и точки на осях
+                if len(self.construction_points) == 0:
+                    # Первый этап: рисуем радиус X
+                    radius_x = abs(self.current_pos.x() - center_screen.x())
+                    painter.drawLine(center_screen.toPoint(), self.current_pos.toPoint())
+                    # Рисуем круг с текущим радиусом X
+                    rect = QRectF(
+                        center_screen.x() - radius_x,
+                        center_screen.y() - radius_x,
+                        radius_x * 2,
+                        radius_x * 2
+                    )
+                    painter.drawEllipse(rect)
+                else:
+                    # Второй этап: рисуем эллипс
+                    radius_x = getattr(self, '_ellipse_radius_x', 50) * self.zoom_factor
+                    radius_y = abs(self.current_pos.y() - center_screen.y())
+                    rect = QRectF(
+                        center_screen.x() - radius_x,
+                        center_screen.y() - radius_y,
+                        radius_x * 2,
+                        radius_y * 2
+                    )
+                    painter.drawEllipse(rect)
         
         elif active_tool == 'polygon':
             # Многоугольник: start = центр, current определяет радиус
@@ -1261,37 +1468,98 @@ class CanvasWidget(QWidget):
             current_pt = Point(current_scene_pos.x(), current_scene_pos.y())
             radius = center.distance_to(current_pt)
             if radius > 0:
-                # Создаём временный многоугольник для превью
-                temp_polygon = Polygon(center, radius, num_sides=6)
+                # Получаем количество сторон из панели
+                num_sides = 6
+                if self.polygon_input_panel:
+                    num_sides = self.polygon_input_panel.get_num_sides()
+                
+                temp_polygon = Polygon(center, radius, num_sides=num_sides)
                 vertices = temp_polygon.vertices
                 screen_vertices = [self.map_from_scene(QPointF(v.x, v.y)) for v in vertices]
                 for i in range(len(screen_vertices)):
                     painter.drawLine(screen_vertices[i], screen_vertices[(i + 1) % len(screen_vertices)])
         
         elif active_tool == 'arc':
-            # Дуга: превью как окружность + начальный угол
-            center_screen = self.start_pos
-            radius = math.sqrt(
-                (self.current_pos.x() - self.start_pos.x()) ** 2 +
-                (self.current_pos.y() - self.start_pos.y()) ** 2
-            )
-            if radius > 0:
-                rect = QRectF(
-                    center_screen.x() - radius,
-                    center_screen.y() - radius,
-                    radius * 2,
-                    radius * 2
-                )
-                # Рисуем дугу 90 градусов от текущего угла
-                angle = math.degrees(math.atan2(
-                    self.start_pos.y() - self.current_pos.y(),
-                    self.current_pos.x() - self.start_pos.x()
-                ))
-                start_angle_qt = int(angle * 16)
-                span_angle_qt = int(90 * 16)
-                painter.drawArc(rect, start_angle_qt, span_angle_qt)
-                # Рисуем радиус-линию
-                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+            # Получаем метод построения
+            arc_method = "three_points"
+            if self.arc_input_panel:
+                arc_method = self.arc_input_panel.get_current_method()
+            
+            if arc_method == "three_points":
+                # Рисуем накопленные точки и текущую позицию курсора
+                all_points = list(self.construction_points)
+                current_pt = Point(current_scene_pos.x(), current_scene_pos.y())
+                all_points.append(current_pt)
+                
+                # Рисуем точки
+                for pt in all_points:
+                    screen_pt = self.map_from_scene(QPointF(pt.x, pt.y))
+                    painter.drawEllipse(screen_pt, 4, 4)
+                
+                # Рисуем линии между точками
+                for i in range(len(all_points) - 1):
+                    p1_screen = self.map_from_scene(QPointF(all_points[i].x, all_points[i].y))
+                    p2_screen = self.map_from_scene(QPointF(all_points[i+1].x, all_points[i+1].y))
+                    painter.drawLine(p1_screen.toPoint(), p2_screen.toPoint())
+                
+                # Если есть 3 точки - рисуем дугу
+                if len(all_points) >= 3:
+                    try:
+                        temp_arc = Arc.from_three_points(all_points[0], all_points[1], all_points[2])
+                        if temp_arc:
+                            self._draw_arc_preview(painter, temp_arc)
+                    except:
+                        pass
+            
+            elif arc_method == "center_angles":
+                # Центр + радиус + углы
+                # Используем сохранённый центр
+                if not hasattr(self, '_arc_center'):
+                    return
+                
+                center = self._arc_center
+                center_screen = self.map_from_scene(QPointF(center.x, center.y))
+                current_pt = Point(current_scene_pos.x(), current_scene_pos.y())
+                
+                # Рисуем центр
+                painter.drawEllipse(center_screen, 4, 4)
+                
+                if len(self.construction_points) == 0:
+                    # Первый этап: показываем окружность и радиус к курсору
+                    radius = center.distance_to(current_pt)
+                    if radius > 0:
+                        radius_screen = radius * self.zoom_factor
+                        rect = QRectF(
+                            center_screen.x() - radius_screen,
+                            center_screen.y() - radius_screen,
+                            radius_screen * 2,
+                            radius_screen * 2
+                        )
+                        painter.drawEllipse(rect)
+                        painter.drawLine(center_screen.toPoint(), self.current_pos.toPoint())
+                else:
+                    # Второй этап: показываем дугу от начальной точки до курсора
+                    start_angle = getattr(self, '_arc_start_angle', 0)
+                    radius = getattr(self, '_arc_radius', 0)
+                    
+                    if radius > 0:
+                        # Угол к текущей позиции курсора
+                        current_angle = math.degrees(math.atan2(
+                            current_pt.y - center.y, current_pt.x - center.x
+                        ))
+                        
+                        # Создаём временную дугу для превью
+                        temp_arc = Arc.from_center_and_angles(center, radius, start_angle, current_angle)
+                        self._draw_arc_preview(painter, temp_arc)
+                        
+                        # Рисуем радиус к начальной точке
+                        start_pt = self.construction_points[0]
+                        start_screen = self.map_from_scene(QPointF(start_pt.x, start_pt.y))
+                        painter.drawLine(center_screen.toPoint(), start_screen.toPoint())
+                        painter.drawEllipse(start_screen, 4, 4)
+                        
+                        # Рисуем радиус к текущей позиции
+                        painter.drawLine(center_screen.toPoint(), self.current_pos.toPoint())
         
         elif active_tool == 'spline':
             # Сплайн: рисуем накопленные точки и текущую
@@ -1321,6 +1589,21 @@ class CanvasWidget(QWidget):
         # Конвертируем обратно в декартовы координаты для построения линии
         end_point = polar_to_cartesian(start_scene, r, theta)
         return end_point
+    
+    def _draw_arc_preview(self, painter: QPainter, arc: Arc):
+        """Рисует превью дуги."""
+        center_screen = self.map_from_scene(QPointF(arc.center.x, arc.center.y))
+        radius_screen = arc.radius * self.zoom_factor
+        rect = QRectF(
+            center_screen.x() - radius_screen,
+            center_screen.y() - radius_screen,
+            radius_screen * 2,
+            radius_screen * 2
+        )
+        # Qt использует 1/16 градуса, и Y инвертирован
+        start_angle_qt = int(-arc.start_angle * 16)
+        span_angle_qt = int(-arc.span_angle * 16)
+        painter.drawArc(rect, start_angle_qt, span_angle_qt)
     
     def _update_line_info(self):
         """Обновляет информацию о линии в статус-баре."""
