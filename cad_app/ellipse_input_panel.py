@@ -16,13 +16,12 @@ class EllipseInputPanel(QWidget):
     ellipse_requested = Signal(Ellipse)
     
     CONSTRUCTION_METHODS = [
-        ("center_radii", "Центр и радиусы"),
         ("center_axes", "Центр и точки на осях"),
     ]
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._current_method = "center_radii"
+        self._current_method = "center_axes"
         self._setup_ui()
         self._connect_signals()
         self._update_inputs_for_method()
@@ -117,18 +116,8 @@ class EllipseInputPanel(QWidget):
                 item.widget().deleteLater()
         self.coord_inputs.clear()
         
-        if self._current_method == "center_radii":
-            self._create_center_radii_inputs()
-        elif self._current_method == "center_axes":
+        if self._current_method == "center_axes":
             self._create_center_axes_inputs()
-    
-    def _create_center_radii_inputs(self):
-        """Центр и радиусы: Xc, Yc, Rx, Ry"""
-        c_group = self._create_input_group("Центр:", ["Xc", "Yc"])
-        self.input_layout.addWidget(c_group)
-        self._add_separator()
-        r_group = self._create_input_group("Радиусы:", ["Rx", "Ry"])
-        self.input_layout.addWidget(r_group)
     
     def _create_center_axes_inputs(self):
         """Центр и точки на осях (для интерактивного построения)"""
