@@ -139,10 +139,27 @@ class SnapManager(QObject):
         nearby_objects = []
         search_radius = tolerance * 2  # Расширенный радиус поиска
         
+        check_center = SnapType.CENTER in self._active_snaps
+        
         for obj in objects:
             if obj is exclude_object:
                 continue
+                
+            is_nearby = False
+            
+            # 1. Проверка по контуру
             if obj.distance_to_point(scene_x, scene_y) <= search_radius:
+                is_nearby = True
+            
+            # 2. Проверка по центру (если активен Center Snap)
+            elif check_center and hasattr(obj, 'center'):
+                 # Для Point из .geometry.point
+                 cx, cy = obj.center.x, obj.center.y
+                 dist_center = math.sqrt((scene_x - cx)**2 + (scene_y - cy)**2)
+                 if dist_center <= search_radius:
+                     is_nearby = True
+            
+            if is_nearby:
                 nearby_objects.append(obj)
         
         # 1. Стандартные привязки (Endpoint, Midpoint, Center, Quadrant, Node)
@@ -251,44 +268,49 @@ class SnapManager(QObject):
     
     def find_intersection(self, obj1: GeometricPrimitive, 
                           obj2: GeometricPrimitive) -> List[SnapPoint]:
-        """Находит точки пересечения двух объектов."""
-        from .geometry import Line, Circle, Arc, Point
-        
+        """
+        Находит точки пересечения двух объектов.
+        Поддерживает: Line, Circle, Arc, Rectangle, Polygon.
+        """
         intersections = []
         
-        # Line - Line
-        if isinstance(obj1, Line) and isinstance(obj2, Line):
-            pt = self._intersect_line_line(obj1, obj2)
-            if pt:
-                intersections.append(SnapPoint(pt.x, pt.y, SnapType.INTERSECTION, obj1))
-                
-        # Line - Circle (and Circle - Line)
-        elif isinstance(obj1, Line) and isinstance(obj2, (Circle, Arc)):
-             pts = self._intersect_line_circle(obj1, obj2)
-             for pt in pts:
-                 intersections.append(SnapPoint(pt.x, pt.y, SnapType.INTERSECTION, obj2))
-        elif isinstance(obj1, (Circle, Arc)) and isinstance(obj2, Line):
-             pts = self._intersect_line_circle(obj2, obj1)
-             for pt in pts:
-                 intersections.append(SnapPoint(pt.x, pt.y, SnapType.INTERSECTION, obj1))
-                 
-        # Circle - Circle
-        elif isinstance(obj1, (Circle, Arc)) and isinstance(obj2, (Circle, Arc)):
-            pts = self._intersect_circle_circle(obj1, obj2)
-            for pt in pts:
-                intersections.append(SnapPoint(pt.x, pt.y, SnapType.INTERSECTION, obj1))
+        # Разбиваем сложные объекты на примитивы (отрезки, дуги)
+        prims1 = self._get_intersector_primitives(obj1)
+        prims2 = self._get_intersector_primitives(obj2)
+        
+        for p1 in prims1:
+            for p2 in prims2:
+                pts = self._intersect_primitives(p1, p2)
+                for pt in pts:
+                    # Добавляем точку пересечения
+                    intersections.append(SnapPoint(pt.x, pt.y, SnapType.INTERSECTION, obj1))
                 
         return intersections
     
     def find_perpendicular(self, from_point: tuple, 
                            to_object: GeometricPrimitive) -> Optional[SnapPoint]:
         """Находит точку перпендикуляра от точки к объекту."""
-        from .geometry import Line, Circle, Arc, Point
+        from .geometry import Line, Circle, Arc, Point, Rectangle, Polygon
         
         fx, fy = from_point
         pt = Point(fx, fy)
         
-        if isinstance(to_object, Line):
+        if isinstance(to_object, (Rectangle, Polygon)):
+            prims = self._get_intersector_primitives(to_object)
+            best_snap = None
+            min_dist = float('inf')
+            
+            for p in prims:
+                if isinstance(p, Line):
+                    perp = p.get_perpendicular_point(pt)
+                    if p.distance_to_point(perp.x, perp.y) < 1e-5:
+                         dist = perp.distance_to(pt)
+                         if dist < min_dist:
+                             min_dist = dist
+                             best_snap = SnapPoint(perp.x, perp.y, SnapType.PERPENDICULAR, to_object)
+            return best_snap
+
+        elif isinstance(to_object, Line):
             perp = to_object.get_perpendicular_point(pt)
             return SnapPoint(perp.x, perp.y, SnapType.PERPENDICULAR, to_object)
             
@@ -300,7 +322,7 @@ class SnapManager(QObject):
     def find_tangent(self, from_point: tuple,
                      to_object: GeometricPrimitive) -> List[SnapPoint]:
         """Находит точки касания."""
-        from .geometry import Circle, Arc, Point
+        from .geometry import Circle, Arc
         
         fx, fy = from_point
         snaps = []
@@ -318,21 +340,76 @@ class SnapManager(QObject):
                 try:
                     alpha = math.acos(radius / dist)
                     
-                    # Точка 1
-                    t1_x = center.x + radius * math.cos(angle_to_center + alpha)
-                    t1_y = center.y + radius * math.sin(angle_to_center + alpha)
-                    snaps.append(SnapPoint(t1_x, t1_y, SnapType.TANGENT, to_object))
+                    angles = [angle_to_center + alpha, angle_to_center - alpha]
                     
-                    # Точка 2
-                    t2_x = center.x + radius * math.cos(angle_to_center - alpha)
-                    t2_y = center.y + radius * math.sin(angle_to_center - alpha)
-                    snaps.append(SnapPoint(t2_x, t2_y, SnapType.TANGENT, to_object))
+                    for ang in angles:
+                        tx = center.x + radius * math.cos(ang)
+                        ty = center.y + radius * math.sin(ang)
+                        
+                        if isinstance(to_object, Arc):
+                            deg = math.degrees(ang)
+                            if not to_object._angle_is_on_arc(deg):
+                                continue
+                                
+                        snaps.append(SnapPoint(tx, ty, SnapType.TANGENT, to_object))
                     
                 except ValueError:
                     pass
              
         return snaps
     
+    # ==================== Внутренняя логика пересечений ====================
+
+    def _get_intersector_primitives(self, obj):
+        """Возвращает список примитивов (Line, Circle, Arc, Ellipse) из которых состоит объект."""
+        from .geometry import Line, Circle, Arc, Rectangle, Polygon, Point, Ellipse
+        
+        if isinstance(obj, (Rectangle, Polygon)):
+            # Превращаем стороны в список Line
+            lines = []
+            if isinstance(obj, Rectangle):
+                corners = obj.corners
+            else: # Polygon
+                corners = obj.vertices
+                
+            n = len(corners)
+            for i in range(n):
+                p1 = corners[i]
+                p2 = corners[(i + 1) % n]
+                lines.append(Line(p1, p2))
+            return lines
+            
+        elif isinstance(obj, (Line, Circle, Arc, Ellipse)):
+            return [obj]
+            
+        return []
+
+    def _intersect_primitives(self, p1, p2):
+        """Находит пересечение двух базовых примитивов."""
+        from .geometry import Line, Circle, Arc, Ellipse, Point
+        
+        points = []
+        
+        # Dispatch types
+        if isinstance(p1, Line) and isinstance(p2, Line):
+            pt = self._intersect_line_line(p1, p2)
+            if pt: points.append(pt)
+            
+        elif isinstance(p1, Line) and isinstance(p2, (Circle, Arc)):
+            points = self._intersect_line_circle(p1, p2)
+        elif isinstance(p1, (Circle, Arc)) and isinstance(p2, Line):
+            points = self._intersect_line_circle(p2, p1)
+            
+        elif isinstance(p1, Line) and isinstance(p2, Ellipse):
+            points = self._intersect_line_ellipse(p1, p2)
+        elif isinstance(p1, Ellipse) and isinstance(p2, Line):
+            points = self._intersect_line_ellipse(p2, p1)
+
+        elif isinstance(p1, (Circle, Arc)) and isinstance(p2, (Circle, Arc)):
+            points = self._intersect_circle_circle(p1, p2)
+            
+        return points
+
     def _intersect_line_line(self, l1, l2):
         """Пересечение двух отрезков (как прямых)."""
         from .geometry import Point
@@ -357,8 +434,8 @@ class SnapManager(QObject):
         return None
 
     def _intersect_line_circle(self, line, circle):
-        """Пересечение отрезка и окружности."""
-        from .geometry import Point
+        """Пересечение отрезка и окружности/дуги."""
+        from .geometry import Point, Arc
         
         x1, y1 = line.start.x, line.start.y
         x2, y2 = line.end.x, line.end.y
@@ -381,18 +458,76 @@ class SnapManager(QObject):
         if discriminant < 0:
             return points
         
-        t1 = (-b - math.sqrt(discriminant)) / (2*a)
-        t2 = (-b + math.sqrt(discriminant)) / (2*a)
+        if a == 0: return points
+        
+        sqrt_d = math.sqrt(discriminant)
+        t1 = (-b - sqrt_d) / (2*a)
+        t2 = (-b + sqrt_d) / (2*a)
         
         for t in [t1, t2]:
             if 0 <= t <= 1: # Проверка на принадлежность отрезку
-                points.append(Point(x1 + t*dx, y1 + t*dy))
+                x = x1 + t*dx
+                y = y1 + t*dy
+                
+                # Если это дуга, проверяем угол
+                if isinstance(circle, Arc):
+                    angle = math.degrees(math.atan2(y - cy, x - cx))
+                    if not circle._angle_is_on_arc(angle):
+                        continue
+                
+                points.append(Point(x, y))
+                
+        return points
+
+    def _intersect_line_ellipse(self, line, ellipse):
+        """Пересечение отрезка и эллипса (с осями, параллельными координатным)."""
+        from .geometry import Point
+        
+        # Параметры эллипса
+        h, k = ellipse.center.x, ellipse.center.y
+        a, b = ellipse.radius_x, ellipse.radius_y
+        
+        # Параметры линии P(t) = P1 + t * (P2 - P1)
+        x1, y1 = line.start.x, line.start.y
+        dx = line.end.x - x1
+        dy = line.end.y - y1
+        
+        # Подставляем x(t), y(t) в уравнение эллипса:
+        # ((x1 + t*dx - h)^2 / a^2) + ((y1 + t*dy - k)^2 / b^2) = 1
+        # Упрощаем: b^2(xp + t*dx)^2 + a^2(yp + t*dy)^2 - a^2*b^2 = 0
+        # где xp = x1 - h, yp = y1 - k
+        
+        xp = x1 - h
+        yp = y1 - k
+        
+        # Коэффициенты квадратного уравнения A*t^2 + B*t + C = 0
+        A = (b * dx)**2 + (a * dy)**2
+        B = 2 * (b**2 * xp * dx + a**2 * yp * dy)
+        C = (b * xp)**2 + (a * yp)**2 - (a * b)**2
+        
+        points = []
+        if A == 0: return points # Линия вырождена в точку или бесконечна (не бывает тут)
+
+        discriminant = B*B - 4*A*C
+        
+        if discriminant < 0:
+            return points
+            
+        sqrt_d = math.sqrt(discriminant)
+        t1 = (-B - sqrt_d) / (2*A)
+        t2 = (-B + sqrt_d) / (2*A)
+        
+        for t in [t1, t2]:
+            if 0 <= t <= 1: # Проверка на принадлежность отрезку
+                x = x1 + t*dx
+                y = y1 + t*dy
+                points.append(Point(x, y))
                 
         return points
 
     def _intersect_circle_circle(self, c1, c2):
-        """Пересечение двух окружностей."""
-        from .geometry import Point
+        """Пересечение двух окружностей/дуг."""
+        from .geometry import Point, Arc
         
         x1, y1 = c1.center.x, c1.center.y
         r1 = c1.radius
@@ -420,7 +555,23 @@ class SnapManager(QObject):
         x4_2 = x3 - h * (y2_rel / d)
         y4_2 = y3 + h * (x2_rel / d)
         
-        return [Point(x4_1, y4_1), Point(x4_2, y4_2)]
+        candidates = [Point(x4_1, y4_1), Point(x4_2, y4_2)]
+        valid_points = []
+        
+        for pt in candidates:
+             valid = True
+             if isinstance(c1, Arc):
+                 ang = math.degrees(math.atan2(pt.y - y1, pt.x - x1))
+                 if not c1._angle_is_on_arc(ang): valid = False
+             
+             if valid and isinstance(c2, Arc):
+                 ang = math.degrees(math.atan2(pt.y - y2, pt.x - x2))
+                 if not c2._angle_is_on_arc(ang): valid = False
+                 
+             if valid:
+                 valid_points.append(pt)
+        
+        return valid_points
 
     # ==================== Сериализация ====================
     
