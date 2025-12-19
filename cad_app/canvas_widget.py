@@ -698,7 +698,10 @@ class CanvasWidget(QWidget):
                     click_point = Point(click_scene_pos.x(), click_scene_pos.y())
                     
                     if arc_method == "three_points":
-                        # Три точки: накапливаем
+                        # Три точки: Start -> End -> Point on Arc
+                        # construction_points[0] = Start
+                        # construction_points[1] = End
+                        # click_point = Point on Arc
                         self.construction_points.append(click_point)
                         
                         if len(self.construction_points) < 3:
@@ -707,9 +710,12 @@ class CanvasWidget(QWidget):
                             self.update()
                             return  # Не сбрасываем start_pos
                         else:
-                            # Все 3 точки собраны
-                            p1, p2, p3 = self.construction_points
-                            arc = Arc.from_three_points(p1, p2, p3, style_name=current_style)
+                            # Все 3 точки собраны: Start, End, Point_on_arc
+                            p_start = self.construction_points[0]
+                            p_end = self.construction_points[1]
+                            p_on_arc = self.construction_points[2]
+                            # Порядок для from_three_points: start, point_on_arc, end
+                            arc = Arc.from_three_points(p_start, p_on_arc, p_end, style_name=current_style)
                             if arc:
                                 self.scene.add_object(arc)
                             else:
@@ -749,7 +755,8 @@ class CanvasWidget(QWidget):
                             arc = Arc.from_center_and_angles(
                                 self._arc_center,
                                 self._arc_radius, start_angle, end_angle,
-                                style_name=current_style
+                                style_name=current_style,
+                                shortest_path=True
                             )
                             self.scene.add_object(arc)
                             self.construction_points = []
@@ -936,6 +943,7 @@ class CanvasWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)  # Включаем сглаживание для красивых линий
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_scene_objects(painter)
@@ -1141,9 +1149,15 @@ class CanvasWidget(QWidget):
         painter.drawEllipse(rect)
     
     def _draw_arc(self, painter: QPainter, obj: Arc, pen: QPen):
-        """Отрисовывает дугу."""
+        """
+        Отрисовывает дугу.
+        
+        Qt drawArc использует углы в 1/16 градуса.
+        В Qt система координат Y направлена вниз, поэтому углы инвертируются.
+        """
         center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
         radius_screen = obj.radius * self.zoom_factor
+        
         
         rect = QRectF(
             center_screen.x() - radius_screen,
@@ -1152,12 +1166,10 @@ class CanvasWidget(QWidget):
             radius_screen * 2
         )
         
-        # Qt использует углы в 1/16 градуса и отсчитывает от 3 часов против часовой стрелки
-        # В нашем случае нужно инвертировать Y, поэтому углы тоже инвертируются
-        # start_angle в Qt: угол в 1/16 градуса от 3 часов
-        # Инвертируем углы для Qt (Y экрана идёт вниз)
-        start_angle_qt = int(-obj.start_angle * 16)  # Инверсия
-        span_angle_qt = int(-obj.span_angle * 16)    # Инверсия
+        # Qt использует 1/16 градуса
+        # Углы в obj уже математические (90 = 12ч), drawArc понимает их правильно в текущем контексте
+        start_angle_qt = int(obj.start_angle * 16)
+        span_angle_qt = int(obj.span_angle * 16)
         
         painter.drawArc(rect, start_angle_qt, span_angle_qt)
     
@@ -1254,8 +1266,8 @@ class CanvasWidget(QWidget):
                     radius_screen * 2,
                     radius_screen * 2
                 )
-                start_angle_qt = int(-obj.start_angle * 16)
-                span_angle_qt = int(-obj.span_angle * 16)
+                start_angle_qt = int(obj.start_angle * 16)
+                span_angle_qt = int(obj.span_angle * 16)
                 painter.drawArc(rect, start_angle_qt, span_angle_qt)
             elif isinstance(obj, Rectangle):
                 corners = obj.corners
@@ -1486,30 +1498,67 @@ class CanvasWidget(QWidget):
                 arc_method = self.arc_input_panel.get_current_method()
             
             if arc_method == "three_points":
-                # Рисуем накопленные точки и текущую позицию курсора
-                all_points = list(self.construction_points)
+                # Логика построения по ТЗ: P_start -> P_end -> P_on_arc
+                # Этап 1 (1 точка): рисуем линию-резинку от Start к курсору (это превью хорды)
+                # Этап 2 (2 точки): прямая исчезает, рисуем дугу через Start, End и курсор
+                #                   курсор = точка НА дуге (дуга "приклеена" к курсору)
+                
                 current_pt = Point(current_scene_pos.x(), current_scene_pos.y())
-                all_points.append(current_pt)
                 
-                # Рисуем точки
-                for pt in all_points:
-                    screen_pt = self.map_from_scene(QPointF(pt.x, pt.y))
-                    painter.drawEllipse(screen_pt, 4, 4)
+                if len(self.construction_points) == 1:
+                    # Этап 1: Определение хорды
+                    # Пользователь видит прямую линию от Start к курсору
+                    p_start = self.construction_points[0]
+                    p_start_screen = self.map_from_scene(QPointF(p_start.x, p_start.y))
+                    
+                    # Маркер начальной точки (Start) - красный квадрат
+                    marker_pen = QPen(QColor("#FF6B6B"), 2)
+                    marker_pen.setCosmetic(True)
+                    painter.setPen(marker_pen)
+                    painter.drawRect(int(p_start_screen.x()) - 4, int(p_start_screen.y()) - 4, 8, 8)
+                    
+                    # Линия-резинка до курсора (сплошная тонкая)
+                    line_pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.SolidLine)
+                    line_pen.setCosmetic(True)
+                    painter.setPen(line_pen)
+                    painter.drawLine(p_start_screen.toPoint(), self.current_pos.toPoint())
                 
-                # Рисуем линии между точками
-                for i in range(len(all_points) - 1):
-                    p1_screen = self.map_from_scene(QPointF(all_points[i].x, all_points[i].y))
-                    p2_screen = self.map_from_scene(QPointF(all_points[i+1].x, all_points[i+1].y))
-                    painter.drawLine(p1_screen.toPoint(), p2_screen.toPoint())
-                
-                # Если есть 3 точки - рисуем дугу
-                if len(all_points) >= 3:
-                    try:
-                        temp_arc = Arc.from_three_points(all_points[0], all_points[1], all_points[2])
-                        if temp_arc:
-                            self._draw_arc_preview(painter, temp_arc)
-                    except:
-                        pass
+                elif len(self.construction_points) == 2:
+                    # Этап 2: Изгиб дуги
+                    # Отрезок P1-P2 фиксирован, курсор "оттягивает" дугу как тетиву лука
+                    p_start = self.construction_points[0]  # Start (первый клик)
+                    p_end = self.construction_points[1]    # End (второй клик)
+                    p_on_arc = current_pt                  # Точка НА дуге = курсор
+                    
+                    # Экранные координаты фиксированных точек
+                    p_start_screen = self.map_from_scene(QPointF(p_start.x, p_start.y))
+                    p_end_screen = self.map_from_scene(QPointF(p_end.x, p_end.y))
+                    
+                    # Маркеры фиксированных точек (Start и End)
+                    marker_pen = QPen(QColor("#FF6B6B"), 2)
+                    marker_pen.setCosmetic(True)
+                    painter.setPen(marker_pen)
+                    painter.drawRect(int(p_start_screen.x()) - 4, int(p_start_screen.y()) - 4, 8, 8)
+                    painter.drawRect(int(p_end_screen.x()) - 4, int(p_end_screen.y()) - 4, 8, 8)
+                    
+                    # Пробуем построить дугу через 3 точки: Start, Point_on_arc, End
+                    # Порядок аргументов: p1=Start, p2=PointOnArc, p3=End
+                    temp_arc = Arc.from_three_points(p_start, p_on_arc, p_end)
+                    
+                    if temp_arc:
+                        # Дуга успешно построена - рисуем её
+                        # Устанавливаем перо для preview дуги
+                        arc_pen = QPen(QColor("#7A86CC"), 2, Qt.PenStyle.SolidLine)
+                        arc_pen.setCosmetic(True)
+                        painter.setPen(arc_pen)
+                        self._draw_arc_preview(painter, temp_arc)
+                    else:
+                        # Точки коллинеарны (радиус = бесконечность)
+                        # Рисуем прямую линию вместо дуги
+                        line_pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.SolidLine)
+                        line_pen.setCosmetic(True)
+                        painter.setPen(line_pen)
+                        painter.drawLine(p_start_screen.toPoint(), p_end_screen.toPoint())
             
             elif arc_method == "center_angles":
                 # Центр + радиус + углы
@@ -1549,7 +1598,7 @@ class CanvasWidget(QWidget):
                         ))
                         
                         # Создаём временную дугу для превью
-                        temp_arc = Arc.from_center_and_angles(center, radius, start_angle, current_angle)
+                        temp_arc = Arc.from_center_and_angles(center, radius, start_angle, current_angle, shortest_path=True)
                         self._draw_arc_preview(painter, temp_arc)
                         
                         # Рисуем радиус к начальной точке
@@ -1600,9 +1649,9 @@ class CanvasWidget(QWidget):
             radius_screen * 2,
             radius_screen * 2
         )
-        # Qt использует 1/16 градуса, и Y инвертирован
-        start_angle_qt = int(-arc.start_angle * 16)
-        span_angle_qt = int(-arc.span_angle * 16)
+        # Qt drawArc: углы в 1/16 градуса
+        start_angle_qt = int(arc.start_angle * 16)
+        span_angle_qt = int(arc.span_angle * 16)
         painter.drawArc(rect, start_angle_qt, span_angle_qt)
     
     def _update_line_info(self):
