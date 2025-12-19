@@ -8,13 +8,17 @@ from PySide6.QtGui import QAction, QIcon, QActionGroup, QPixmap, QPainter, QPen,
 from PySide6.QtCore import Qt, QSize
 
 from .core.scene import Scene
-from .core.geometry import Line, Point
+from .core.geometry import (
+    Point, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
+    GeometricPrimitive
+)
 from .core.style_manager import style_manager
 from .canvas_widget import CanvasWidget
 from .theme import get_stylesheet
 from .settings_dialog import SettingsDialog
 from .settings import settings
 from .line_input_panel import LineInputPanel
+from .circle_input_panel import CircleInputPanel
 from .icon_utils import load_svg_icon
 
 class MainWindow(QMainWindow):
@@ -31,9 +35,21 @@ class MainWindow(QMainWindow):
 
         self._create_actions()
         
+        # Создаем словарь с actions инструментов для передачи в CanvasWidget
+        tool_actions = {
+            'select': self.select_tool_action,
+            'line': self.line_tool_action,
+            'circle': self.circle_tool_action,
+            'arc': self.arc_tool_action,
+            'rectangle': self.rectangle_tool_action,
+            'ellipse': self.ellipse_tool_action,
+            'polygon': self.polygon_tool_action,
+            'spline': self.spline_tool_action,
+            'delete': self.delete_tool_action,
+        }
+        
         # Создаем Представление/Контроллер и передаем ему Модель
-        # Теперь line_tool_action и delete_tool_action уже определены
-        self.canvas = CanvasWidget(self.scene, self.select_tool_action, self.line_tool_action, self.delete_tool_action)
+        self.canvas = CanvasWidget(self.scene, tool_actions)
         self.setCentralWidget(self.canvas)
         
         # Подключаем zoom_fit_action после создания canvas
@@ -54,6 +70,12 @@ class MainWindow(QMainWindow):
         
         # Подключаем сигналы для обновления метки инструмента
         self.line_tool_action.toggled.connect(self._update_tool_label)
+        self.circle_tool_action.toggled.connect(self._update_tool_label)
+        self.arc_tool_action.toggled.connect(self._update_tool_label)
+        self.rectangle_tool_action.toggled.connect(self._update_tool_label)
+        self.ellipse_tool_action.toggled.connect(self._update_tool_label)
+        self.polygon_tool_action.toggled.connect(self._update_tool_label)
+        self.spline_tool_action.toggled.connect(self._update_tool_label)
         self.delete_tool_action.toggled.connect(self._update_tool_label)
         self.pan_tool_action.toggled.connect(self._update_tool_label)
         self.select_tool_action.toggled.connect(self._update_tool_label)
@@ -61,8 +83,9 @@ class MainWindow(QMainWindow):
         # Устанавливаем начальное значение метки инструмента
         self._update_tool_label()
         
-        # Связываем выбор инструмента "линия" с показом/скрытием панели ввода
+        # Связываем выбор инструментов с показом/скрытием панелей ввода
         self.line_tool_action.toggled.connect(self._on_line_tool_toggled)
+        self.circle_tool_action.toggled.connect(self._on_circle_tool_toggled)
 
         # Связываем выделение с комбобоксом стилей
         self.canvas.selection_changed.connect(self._update_style_combo_by_selection)
@@ -89,6 +112,40 @@ class MainWindow(QMainWindow):
         
         self.line_tool_action = QAction(load_svg_icon("public/line.svg"), "Линия", self)
         self.line_tool_action.setCheckable(True)
+        self.line_tool_action.setToolTip("Линия (L)")
+        self.line_tool_action.setShortcut("L")
+        
+        # Инструменты для других примитивов
+        self.circle_tool_action = QAction(load_svg_icon("public/circle.svg"), "Окружность", self)
+        self.circle_tool_action.setCheckable(True)
+        self.circle_tool_action.setToolTip("Окружность (C)")
+        self.circle_tool_action.setShortcut("C")
+        
+        self.arc_tool_action = QAction(load_svg_icon("public/arc.svg"), "Дуга", self)
+        self.arc_tool_action.setCheckable(True)
+        self.arc_tool_action.setToolTip("Дуга (A)")
+        self.arc_tool_action.setShortcut("A")
+        
+        self.rectangle_tool_action = QAction(load_svg_icon("public/rectangle.svg"), "Прямоугольник", self)
+        self.rectangle_tool_action.setCheckable(True)
+        self.rectangle_tool_action.setToolTip("Прямоугольник (R)")
+        # R уже занят для поворота, используем Shift+R
+        self.rectangle_tool_action.setShortcut("Shift+R")
+        
+        self.ellipse_tool_action = QAction(load_svg_icon("public/ellipse.svg"), "Эллипс", self)
+        self.ellipse_tool_action.setCheckable(True)
+        self.ellipse_tool_action.setToolTip("Эллипс (E)")
+        self.ellipse_tool_action.setShortcut("E")
+        
+        self.polygon_tool_action = QAction(load_svg_icon("public/polygon.svg"), "Многоугольник", self)
+        self.polygon_tool_action.setCheckable(True)
+        self.polygon_tool_action.setToolTip("Многоугольник (P)")
+        self.polygon_tool_action.setShortcut("P")
+        
+        self.spline_tool_action = QAction(load_svg_icon("public/spline.svg"), "Сплайн", self)
+        self.spline_tool_action.setCheckable(True)
+        self.spline_tool_action.setToolTip("Сплайн (S)")
+        self.spline_tool_action.setShortcut("S")
 
         self.delete_tool_action = QAction(load_svg_icon("public/delete.svg"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
@@ -153,11 +210,31 @@ class MainWindow(QMainWindow):
         tool_group = QActionGroup(self)
         tool_group.addAction(self.select_tool_action)
         tool_group.addAction(self.line_tool_action)
+        tool_group.addAction(self.circle_tool_action)
+        tool_group.addAction(self.arc_tool_action)
+        tool_group.addAction(self.rectangle_tool_action)
+        tool_group.addAction(self.ellipse_tool_action)
+        tool_group.addAction(self.polygon_tool_action)
+        tool_group.addAction(self.spline_tool_action)
         tool_group.addAction(self.delete_tool_action)
         tool_group.addAction(self.pan_tool_action)
         
+        # Добавляем инструменты в toolbar
         edit_toolbar.addAction(self.select_tool_action)
+        
+        edit_toolbar.addSeparator()  # Разделитель перед примитивами
+        
+        # Инструменты рисования примитивов
         edit_toolbar.addAction(self.line_tool_action)
+        edit_toolbar.addAction(self.circle_tool_action)
+        edit_toolbar.addAction(self.arc_tool_action)
+        edit_toolbar.addAction(self.rectangle_tool_action)
+        edit_toolbar.addAction(self.ellipse_tool_action)
+        edit_toolbar.addAction(self.polygon_tool_action)
+        edit_toolbar.addAction(self.spline_tool_action)
+        
+        edit_toolbar.addSeparator()  # Разделитель после примитивов
+        
         edit_toolbar.addAction(self.delete_tool_action)
         edit_toolbar.addAction(self.pan_tool_action)
         
@@ -201,19 +278,38 @@ class MainWindow(QMainWindow):
         self.pan_tool_action.setChecked(False)
         self.canvas.set_pan_tool_active(False)
     
+    def _update_input_panels_visibility(self):
+        """Обновляет видимость панелей ввода в зависимости от активного инструмента."""
+        # Скрываем все панели
+        if hasattr(self, 'line_input_toolbar'):
+            self.line_input_toolbar.hide()
+        if hasattr(self, 'circle_input_toolbar'):
+            self.circle_input_toolbar.hide()
+        
+        # Показываем панель для активного инструмента
+        if self.line_tool_action.isChecked():
+            if hasattr(self, 'line_input_toolbar'):
+                self.line_input_toolbar.show()
+        elif self.circle_tool_action.isChecked():
+            if hasattr(self, 'circle_input_toolbar'):
+                self.circle_input_toolbar.show()
+        # TODO: добавить панели для других примитивов
+    
     def _on_line_tool_toggled(self, checked):
         """Обработчик переключения инструмента 'линия'."""
         if checked:
-            # Деактивируем другие инструменты
             self.delete_tool_action.setChecked(False)
             self.pan_tool_action.setChecked(False)
             self.canvas.set_pan_tool_active(False)
-        
-        if hasattr(self, 'line_input_toolbar'):
-            if checked:
-                self.line_input_toolbar.show()
-            else:
-                self.line_input_toolbar.hide()
+        self._update_input_panels_visibility()
+    
+    def _on_circle_tool_toggled(self, checked):
+        """Обработчик переключения инструмента 'окружность'."""
+        if checked:
+            self.delete_tool_action.setChecked(False)
+            self.pan_tool_action.setChecked(False)
+            self.canvas.set_pan_tool_active(False)
+        self._update_input_panels_visibility()
     
     def _on_delete_tool_toggled(self, checked):
         """Обработчик переключения инструмента удаления."""
@@ -243,9 +339,12 @@ class MainWindow(QMainWindow):
     
     def _on_line_build_requested(self, start_point: Point, end_point: Point):
         """Обработчик запроса на построение линии из панели ввода."""
-        # Создаем линию из переданных точек
         line = Line(start_point, end_point)
         self.scene.add_object(line)
+    
+    def _on_circle_build_requested(self, circle: Circle):
+        """Обработчик запроса на построение окружности из панели ввода."""
+        self.scene.add_object(circle)
 
     def _create_status_bar(self):
         # Строка состояния
@@ -292,16 +391,25 @@ class MainWindow(QMainWindow):
         
         # Добавляем панель в нижнюю часть окна (BottomToolBarArea)
         # Используем addToolBar, чтобы панель вела себя как toolbar
-        self.line_input_toolbar = QToolBar("Ввод координат")
+        self.line_input_toolbar = QToolBar("Ввод координат линии")
         self.line_input_toolbar.addWidget(self.line_input_panel)
         self.line_input_toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.line_input_toolbar)
         
-        # Показываем панель, если инструмент "линия" активен (он активен по умолчанию)
-        if self.line_tool_action.isChecked():
-            self.line_input_toolbar.show()
-        else:
-            self.line_input_toolbar.hide()
+        # Создаём панель ввода для окружности
+        self.circle_input_panel = CircleInputPanel(self)
+        self.circle_input_panel.circle_requested.connect(self._on_circle_build_requested)
+        
+        self.circle_input_toolbar = QToolBar("Ввод параметров окружности")
+        self.circle_input_toolbar.addWidget(self.circle_input_panel)
+        self.circle_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.circle_input_toolbar)
+        
+        # Передаём ссылку на панель окружности в canvas для получения метода построения
+        self.canvas.circle_input_panel = self.circle_input_panel
+        
+        # Показываем панель для активного инструмента
+        self._update_input_panels_visibility()
 
     def _create_style_combo(self) -> QWidget:
         """
@@ -460,6 +568,18 @@ class MainWindow(QMainWindow):
         """Обновляет метку активного инструмента."""
         if self.line_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Линия")
+        elif self.circle_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Окружность")
+        elif self.arc_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Дуга")
+        elif self.rectangle_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Прямоугольник")
+        elif self.ellipse_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Эллипс")
+        elif self.polygon_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Многоугольник")
+        elif self.spline_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Сплайн")
         elif self.delete_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Удаление")
         elif self.pan_tool_action.isChecked():
@@ -538,16 +658,28 @@ class MainWindow(QMainWindow):
                     self.canvas.set_view_state(project_data["view_state"])
 
                 # Воссоздаем объекты из файла
+                # Для всех примитивов используем соответствующие from_dict методы
+                PRIMITIVE_TYPES = {
+                    "line": Line,
+                    "circle": Circle,
+                    "arc": Arc,
+                    "rectangle": Rectangle,
+                    "ellipse": Ellipse,
+                    "polygon": Polygon,
+                    "spline": Spline,
+                }
+                
                 new_objects = []
                 for obj_data in project_data.get("objects", []):
                     obj_type = obj_data.get("type")
-                    if obj_type == "line":
-                        # Используем ваш метод from_dict для создания объекта
-                        line_obj = Line.from_dict(obj_data)
-                        new_objects.append(line_obj)
-                    # TODO: Добавить обработку других типов объектов (круги, дуги и т.д.)
+                    if obj_type in PRIMITIVE_TYPES:
+                        primitive_class = PRIMITIVE_TYPES[obj_type]
+                        obj = primitive_class.from_dict(obj_data)
+                        new_objects.append(obj)
+                    else:
+                        print(f"Неизвестный тип объекта: {obj_type}")
                 
-                # Добавляем все объекты в сцену одним махом (более эффективно)
+                # Добавляем все объекты в сцену
                 for obj in new_objects:
                     self.scene.add_object(obj)
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 43.75 43.75">
+  <!-- Spline curve -->
+  <path d="M 5 35 Q 12 5, 22 22 T 40 10" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="5" cy="35" r="2.5" fill="#000"/>
+  <circle cx="22" cy="22" r="2.5" fill="#000"/>
+  <circle cx="40" cy="10" r="2.5" fill="#000"/>
+</svg>

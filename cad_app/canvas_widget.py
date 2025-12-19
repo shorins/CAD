@@ -1,10 +1,14 @@
 import math
 from PySide6.QtWidgets import QWidget, QMenu
-from PySide6.QtGui import QPainter, QColor, QPen, QAction, QContextMenuEvent, QIcon, QMouseEvent
-from PySide6.QtCore import Qt, QPointF, Signal, QTimer
+from PySide6.QtGui import QPainter, QColor, QPen, QAction, QContextMenuEvent, QIcon, QMouseEvent, QBrush, QPainterPath
+from PySide6.QtCore import Qt, QPointF, Signal, QTimer, QRectF
 
 from .core.scene import Scene
-from .core.geometry import Point, Line
+from .core.geometry import (
+    Point, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
+    GeometricPrimitive, SnapType
+)
+from .core.snap_manager import snap_manager
 # from .core.algorithms import bresenham
 from .core.math_utils import (distance_point_to_segment_sq, get_distance, 
                              cartesian_to_polar, get_angle_between_points,
@@ -21,15 +25,30 @@ class CanvasWidget(QWidget):
     rotation_changed = Signal(float)  # Сигнал для передачи текущего rotation_angle
     selection_changed = Signal(list) # Сигнал об изменении выделения (передает список выделенных объектов)
 
-    def __init__(self, scene: Scene, select_tool_action: QAction, line_tool_action: QAction, delete_tool_action: QAction, parent=None):
+    def __init__(self, scene: Scene, tool_actions: dict, parent=None):
+        """
+        Args:
+            scene: Сцена с объектами
+            tool_actions: Словарь с actions инструментов:
+                'select', 'line', 'circle', 'arc', 'rectangle', 
+                'ellipse', 'polygon', 'spline', 'delete'
+        """
         super().__init__(parent)
         self.scene = scene
         self.scene.scene_changed.connect(self.update)
         settings.settings_changed.connect(self.on_settings_changed)
 
-        self.select_tool_action = select_tool_action
-        self.line_tool_action = line_tool_action
-        self.delete_tool_action = delete_tool_action
+        # Сохраняем все tool actions
+        self.tool_actions = tool_actions
+        self.select_tool_action = tool_actions.get('select')
+        self.line_tool_action = tool_actions.get('line')
+        self.circle_tool_action = tool_actions.get('circle')
+        self.arc_tool_action = tool_actions.get('arc')
+        self.rectangle_tool_action = tool_actions.get('rectangle')
+        self.ellipse_tool_action = tool_actions.get('ellipse')
+        self.polygon_tool_action = tool_actions.get('polygon')
+        self.spline_tool_action = tool_actions.get('spline')
+        self.delete_tool_action = tool_actions.get('delete')
         
         # Сбрасываем выделение при выходе из режима удаления
         self.delete_tool_action.changed.connect(self._on_delete_tool_changed)
@@ -99,11 +118,47 @@ class CanvasWidget(QWidget):
         self.pan_start_pos = None  # Начальная позиция мыши при начале панорамирования
         self.pan_start_camera = None  # Начальная позиция камеры при начале панорамирования
         
+        # Snap point state
+        self.current_snap_point = None  # Текущая точка привязки (SnapPoint или None)
+        
+        # Состояние построения примитивов (для многокликовых методов)
+        self.construction_points = []  # Накопленные точки (Point)
+        self.construction_method = None  # Текущий метод построения (строка)
+        
+        # Ссылки на панели ввода (устанавливаются из MainWindow)
+        self.circle_input_panel = None
+        
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
         
         # Отправляем начальные значения zoom и rotation
         self.zoom_changed.emit(self.zoom_factor)
         self.rotation_changed.emit(self.rotation_angle)
+    
+    def get_active_drawing_tool(self) -> str | None:
+        """
+        Возвращает имя активного инструмента рисования.
+        Returns:
+            'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon', 'spline' или None
+        """
+        if self.line_tool_action and self.line_tool_action.isChecked():
+            return 'line'
+        if self.circle_tool_action and self.circle_tool_action.isChecked():
+            return 'circle'
+        if self.arc_tool_action and self.arc_tool_action.isChecked():
+            return 'arc'
+        if self.rectangle_tool_action and self.rectangle_tool_action.isChecked():
+            return 'rectangle'
+        if self.ellipse_tool_action and self.ellipse_tool_action.isChecked():
+            return 'ellipse'
+        if self.polygon_tool_action and self.polygon_tool_action.isChecked():
+            return 'polygon'
+        if self.spline_tool_action and self.spline_tool_action.isChecked():
+            return 'spline'
+        return None
+    
+    def is_drawing_tool_active(self) -> bool:
+        """Проверяет, активен ли какой-либо инструмент рисования."""
+        return self.get_active_drawing_tool() is not None
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -416,45 +471,179 @@ class CanvasWidget(QWidget):
             self.update()
             return
         
-        # 1. Инструмент ЛИНИЯ
-        if self.line_tool_action.isChecked():
-            if event.button() == Qt.MouseButton.LeftButton:
-                if self.start_pos is None:
-                    if self.pan_start_pos is not None:
-                        self.pan_start_pos = None
-                        self.setCursor(Qt.CursorShape.ArrowCursor)
-                    self.start_pos = event.position()
-                    self.current_pos = self.start_pos
-                    self._update_line_info()
-                    # Сбрасываем выделение при начале рисования
-                    if self.selected_objects:
-                        self.selected_objects = []
-                        self.selection_changed.emit(self.selected_objects)
-                else:
-                    # Завершаем линию
-                    start_scene_pos = self.map_to_scene(self.start_pos)
+        current_style = style_manager.current_style_name
+        active_tool = self.get_active_drawing_tool()
+        
+        # Обработка инструментов рисования (ЛКМ)
+        if active_tool and event.button() == Qt.MouseButton.LeftButton:
+            # Сбрасываем выделение при начале рисования
+            if self.selected_objects:
+                self.selected_objects = []
+                self.selection_changed.emit(self.selected_objects)
+            
+            # Сбрасываем панорамирование если было активно
+            if self.pan_start_pos is not None:
+                self.pan_start_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            
+            # Получаем позицию клика с учётом привязок
+            if self.current_snap_point:
+                click_scene_pos = QPointF(self.current_snap_point.x, self.current_snap_point.y)
+            else:
+                click_scene_pos = self.map_to_scene(event.position())
+            
+            if self.start_pos is None:
+                # Первый клик - начало построения
+                self.start_pos = event.position()
+                self.current_pos = self.start_pos
+                
+                # Для методов с 3+ точками - сохраняем первую точку
+                if active_tool == 'circle':
+                    circle_method = "center_radius"
+                    if self.circle_input_panel:
+                        circle_method = self.circle_input_panel.get_current_method()
+                    if circle_method == "three_points":
+                        self.construction_points = [Point(click_scene_pos.x(), click_scene_pos.y())]
+                
+                self._update_line_info()
+            else:
+                # Второй клик - завершение построения
+                start_scene_pos = self.map_to_scene(self.start_pos)
+                
+                if active_tool == 'line':
+                    # Линия: от start до end
                     if self._current_construction_mode == "polar":
                         cursor_pos = self.current_pos if self.current_pos else event.position()
                         current_scene_pos = self.map_to_scene(cursor_pos)
                         end_point_qpoint = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
                         end_point = Point(end_point_qpoint.x(), end_point_qpoint.y())
                     else:
-                        end_scene_pos = self.map_to_scene(event.position())
-                        end_point = Point(end_scene_pos.x(), end_scene_pos.y())
+                        end_point = Point(click_scene_pos.x(), click_scene_pos.y())
                     
-                    # Создаем линию с ТЕКУЩИМ стилем из менеджера
-                    current_style = style_manager.current_style_name
                     start_point = Point(start_scene_pos.x(), start_scene_pos.y())
-                    line = Line(start_point, end_point, style_name=current_style) # <-- Передаем стиль
+                    obj = Line(start_point, end_point, style_name=current_style)
+                    self.scene.add_object(obj)
+                
+                elif active_tool == 'circle':
+                    # Получаем метод построения из панели
+                    circle_method = "center_radius"
+                    if self.circle_input_panel:
+                        circle_method = self.circle_input_panel.get_current_method()
                     
-                    self.scene.add_object(line)
-                    self.start_pos = None
-                    self.current_pos = None
-                    self.line_info_changed.emit("")
-            elif event.button() == Qt.MouseButton.RightButton and self.start_pos:
+                    click_point = Point(click_scene_pos.x(), click_scene_pos.y())
+                    
+                    if circle_method == "center_radius" or circle_method == "center_diameter":
+                        # Центр и радиус/диаметр: первый клик = центр, второй = точка на окружности
+                        center = Point(start_scene_pos.x(), start_scene_pos.y())
+                        radius = center.distance_to(click_point)
+                        if circle_method == "center_diameter":
+                            # Второй клик - точка на окружности, но интерпретируем как точку на краю диаметра
+                            radius = radius  # то же самое
+                        if radius > 0:
+                            obj = Circle(center, radius, style_name=current_style)
+                            self.scene.add_object(obj)
+                    
+                    elif circle_method == "two_points":
+                        # Две точки на диаметре
+                        p1 = Point(start_scene_pos.x(), start_scene_pos.y())
+                        p2 = click_point
+                        obj = Circle.from_two_points(p1, p2, style_name=current_style)
+                        self.scene.add_object(obj)
+                    
+                    elif circle_method == "three_points":
+                        # Три точки: накапливаем
+                        self.construction_points.append(click_point)
+                        
+                        if len(self.construction_points) < 3:
+                            # Ещё не все точки
+                            self.start_pos = event.position()
+                            self.update()
+                            return  # Не сбрасываем start_pos
+                        else:
+                            # Все 3 точки собраны
+                            p1, p2, p3 = self.construction_points
+                            try:
+                                obj = Circle.from_three_points(p1, p2, p3, style_name=current_style)
+                                self.scene.add_object(obj)
+                            except ValueError as e:
+                                print(f"Невозможно построить окружность: {e}")
+                            self.construction_points = []
+                
+                elif active_tool == 'rectangle':
+                    # Прямоугольник: два угла
+                    p1 = Point(start_scene_pos.x(), start_scene_pos.y())
+                    p2 = Point(click_scene_pos.x(), click_scene_pos.y())
+                    if p1.x != p2.x and p1.y != p2.y:
+                        obj = Rectangle(p1, p2, style_name=current_style)
+                        self.scene.add_object(obj)
+                
+                elif active_tool == 'ellipse':
+                    # Эллипс: center + радиусы определяются по смещению
+                    center = Point(start_scene_pos.x(), start_scene_pos.y())
+                    radius_x = abs(click_scene_pos.x() - center.x)
+                    radius_y = abs(click_scene_pos.y() - center.y)
+                    if radius_x > 0 and radius_y > 0:
+                        obj = Ellipse(center, radius_x, radius_y, style_name=current_style)
+                        self.scene.add_object(obj)
+                
+                elif active_tool == 'polygon':
+                    # Многоугольник: center + radius
+                    center = Point(start_scene_pos.x(), start_scene_pos.y())
+                    radius = center.distance_to(Point(click_scene_pos.x(), click_scene_pos.y()))
+                    if radius > 0:
+                        # По умолчанию 6 сторон (можно будет настроить через панель свойств)
+                        obj = Polygon(center, radius, num_sides=6, style_name=current_style)
+                        self.scene.add_object(obj)
+                
+                elif active_tool == 'arc':
+                    # Дуга: нужны 3 точки. Используем промежуточную точку.
+                    # Первый клик = центр, второй = начальная точка на дуге
+                    # Третий клик (при следующем вызове) = конечная точка
+                    # Пока упрощённо: center + radius + 90 градусов
+                    center = Point(start_scene_pos.x(), start_scene_pos.y())
+                    end_pt = Point(click_scene_pos.x(), click_scene_pos.y())
+                    radius = center.distance_to(end_pt)
+                    if radius > 0:
+                        import math
+                        start_angle = math.degrees(math.atan2(
+                            end_pt.y - center.y, end_pt.x - center.x
+                        ))
+                        # По умолчанию 90 градусов (можно будет настроить)
+                        obj = Arc(center, radius, start_angle, 90, style_name=current_style)
+                        self.scene.add_object(obj)
+                
+                elif active_tool == 'spline':
+                    # Сплайн: накапливаем точки. Завершение по двойному клику или ПКМ
+                    # Добавляем точку в текущий сплайн
+                    if not hasattr(self, '_spline_points'):
+                        self._spline_points = []
+                    
+                    self._spline_points.append(Point(click_scene_pos.x(), click_scene_pos.y()))
+                    
+                    # Не сбрасываем start_pos для сплайна - продолжаем добавлять точки
+                    self.start_pos = event.position()  # Обновляем для preview
+                    self.update()
+                    return  # Не сбрасываем start_pos
+                
+                # Сбрасываем состояние построения
                 self.start_pos = None
                 self.current_pos = None
                 self.line_info_changed.emit("")
+        
+        # Отмена построения правой кнопкой мыши
+        elif active_tool and event.button() == Qt.MouseButton.RightButton:
+            if active_tool == 'spline' and hasattr(self, '_spline_points') and len(self._spline_points) >= 2:
+                # Завершаем сплайн
+                obj = Spline(self._spline_points, style_name=current_style)
+                self.scene.add_object(obj)
+                self._spline_points = []
+            
+            self.start_pos = None
+            self.current_pos = None
+            self.construction_points = []  # Сбрасываем накопленные точки
+            self.line_info_changed.emit("")
+            if hasattr(self, '_spline_points'):
+                self._spline_points = []
                 
         # 2. Инструмент УДАЛЕНИЕ
         elif self.delete_tool_action.isChecked():
@@ -463,7 +652,7 @@ class CanvasWidget(QWidget):
                 self.highlighted_line = None
                 
         # 3. Инструмент ВЫДЕЛЕНИЕ (если активен select_tool_action или никакой другой не активен)
-        elif self.select_tool_action.isChecked() or (not self.pan_tool_active and not self.line_tool_action.isChecked() and not self.delete_tool_action.isChecked()):
+        elif self.select_tool_action.isChecked() or (not self.pan_tool_active and not self.is_drawing_tool_active() and not self.delete_tool_action.isChecked()):
             if event.button() == Qt.MouseButton.LeftButton:
                 clicked_object = self._get_object_at_cursor(event.position())
                 
@@ -560,11 +749,18 @@ class CanvasWidget(QWidget):
                 self.update()
             self.setCursor(Qt.CursorShape.ArrowCursor)  # Обычная стрелка
         
-        # Обработка построения линии
+        # Обработка построения примитивов
         if self.start_pos:
             self.current_pos = event.position()
+            
+            # Поиск точки привязки
+            self._update_snap_point(event.position())
+            
             self._update_line_info()  # Обновляем информацию о линии при движении
             self.update()
+        elif self.is_drawing_tool_active():
+            # Если инструмент рисования активен, но построение ещё не начато - ищем привязки
+            self._update_snap_point(event.position())
 
     def mouseReleaseEvent(self, event):
         # Обработка отпускания левой кнопки при pan tool
@@ -589,6 +785,7 @@ class CanvasWidget(QWidget):
         self._draw_hover_highlighted_line(painter)  # Рисуем hover подсветку (голубая)
         self._draw_highlighted_line(painter)  # Рисуем delete подсветку (красная)
         self._draw_preview(painter)
+        self._draw_snap_indicator(painter)  # Рисуем индикатор привязки
         
         # Отрисовываем индикатор поворота поверх всего остального
         if self.show_rotation_indicator:
@@ -704,64 +901,158 @@ class CanvasWidget(QWidget):
         base_width = style_manager.base_width
 
         for obj in self.scene.objects:
+            # Пропускаем объекты для специальной отрисовки
+            if obj == self.hover_highlighted_line:
+                continue
+            if obj == self.highlighted_line and self.delete_tool_action.isChecked():
+                continue
+            
+            # Получаем стиль объекта
+            style = style_manager.get_style(obj.style_name)
+            
+            # Создаем перо
+            pen = QPen(default_color)
+            pen_width = base_width * style.width_mult
+            pen.setWidthF(pen_width)
+            pen.setCosmetic(True)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            
+            # Настраиваем паттерн
+            if style.pattern and style.name not in ["Сплошная волнистая", "Сплошная с изломами"]:
+                pen.setStyle(Qt.PenStyle.CustomDashLine)
+                pen.setDashPattern(style.pattern)
+            else:
+                pen.setStyle(Qt.PenStyle.SolidLine)
+            
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            
+            # Отрисовка в зависимости от типа примитива
             if isinstance(obj, Line):
-                # Пропускаем линии, которые рисуются спец. цветом (подсветка/удаление)
-                if obj == self.hover_highlighted_line:
-                    continue
-                if obj == self.highlighted_line and self.delete_tool_action.isChecked():
-                    continue
-                
-                # Получаем стиль линии
-                style = style_manager.get_style(obj.style_name)
-                # Создаем перо
-                pen = QPen(default_color)
-                # Вычисляем толщину: Базовая S * Множитель стиля
-                pen_width = base_width * style.width_mult
-                pen.setWidthF(pen_width)
-                # Включаем Cosmetic (толщина не зависит от зума) по тз
-                pen.setCosmetic(True)
-                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                self._draw_line(painter, obj, pen, pen_width)
+            elif isinstance(obj, Circle):
+                self._draw_circle(painter, obj, pen)
+            elif isinstance(obj, Arc):
+                self._draw_arc(painter, obj, pen)
+            elif isinstance(obj, Rectangle):
+                self._draw_rectangle(painter, obj, pen)
+            elif isinstance(obj, Ellipse):
+                self._draw_ellipse(painter, obj, pen)
+            elif isinstance(obj, Polygon):
+                self._draw_polygon(painter, obj, pen)
+            elif isinstance(obj, Spline):
+                self._draw_spline(painter, obj, pen)
+    
+    def _draw_line(self, painter: QPainter, obj: Line, pen: QPen, pen_width: float):
+        """Отрисовывает отрезок."""
+        style = style_manager.get_style(obj.style_name)
+        start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
+        end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
 
-                start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
-                end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
-
-                if style.name == "Сплошная волнистая":
-                    # Используем нашу вынесенную функцию
-                    # Амплитуда зависит от толщины, чтобы выглядело пропорционально
-                    amp = pen_width * 1.5 
-                    path = create_wavy_path(start_screen, end_screen, amplitude=amp, period=10)
-                    
-                    # Для волнистой линии нужен Solid стиль (рисуем сплошной путь)
-                    pen.setStyle(Qt.PenStyle.SolidLine) 
-                    painter.setPen(pen)
-                    painter.drawPath(path)
-                elif style.name == "Сплошная с изломами":
-                    # Высота излома зависит от толщины (чтобы было видно)
-                    # zigzag_height ~ 4-5 мм визуально, или пропорционально S
-                    # Сделаем высоту ~10px и ширину ~15px для наглядности (можно привязать к DPI, но пока фикс)
-                    z_height = max(5.0, pen_width * 3.0) 
-                    z_width = z_height * 0.8
-                    
-                    # Период появления изломов. Для длинных линий - реже.
-                    # Пусть будет каждые 150 пикселей экрана (примерно 3-4 см)
-                    path = create_zigzag_path(start_screen, end_screen, 
-                                            zigzag_height=z_height, 
-                                            zigzag_width=z_width, 
-                                            period=150)
-                    
-                    pen.setStyle(Qt.PenStyle.SolidLine)
-                    painter.setPen(pen)
-                    painter.drawPath(path)
-                else:
-                    # Стандартная отрисовка (прямая линия + паттерн пунктира)
-                    if style.pattern:
-                        pen.setStyle(Qt.PenStyle.CustomDashLine)
-                        pen.setDashPattern(style.pattern)
-                    else:
-                        pen.setStyle(Qt.PenStyle.SolidLine)
-                    
-                    painter.setPen(pen)
-                    painter.drawLine(start_screen, end_screen)
+        if style.name == "Сплошная волнистая":
+            amp = pen_width * 1.5 
+            path = create_wavy_path(start_screen, end_screen, amplitude=amp, period=10)
+            pen.setStyle(Qt.PenStyle.SolidLine) 
+            painter.setPen(pen)
+            painter.drawPath(path)
+        elif style.name == "Сплошная с изломами":
+            z_height = max(5.0, pen_width * 3.0) 
+            z_width = z_height * 0.8
+            path = create_zigzag_path(start_screen, end_screen, 
+                                    zigzag_height=z_height, 
+                                    zigzag_width=z_width, 
+                                    period=150)
+            pen.setStyle(Qt.PenStyle.SolidLine)
+            painter.setPen(pen)
+            painter.drawPath(path)
+        else:
+            painter.drawLine(start_screen, end_screen)
+    
+    def _draw_circle(self, painter: QPainter, obj: Circle, pen: QPen):
+        """Отрисовывает окружность."""
+        center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
+        # Для радиуса нужно учесть zoom
+        radius_screen = obj.radius * self.zoom_factor
+        
+        rect = QRectF(
+            center_screen.x() - radius_screen,
+            center_screen.y() - radius_screen,
+            radius_screen * 2,
+            radius_screen * 2
+        )
+        painter.drawEllipse(rect)
+    
+    def _draw_arc(self, painter: QPainter, obj: Arc, pen: QPen):
+        """Отрисовывает дугу."""
+        center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
+        radius_screen = obj.radius * self.zoom_factor
+        
+        rect = QRectF(
+            center_screen.x() - radius_screen,
+            center_screen.y() - radius_screen,
+            radius_screen * 2,
+            radius_screen * 2
+        )
+        
+        # Qt использует углы в 1/16 градуса и отсчитывает от 3 часов против часовой стрелки
+        # В нашем случае нужно инвертировать Y, поэтому углы тоже инвертируются
+        # start_angle в Qt: угол в 1/16 градуса от 3 часов
+        # Инвертируем углы для Qt (Y экрана идёт вниз)
+        start_angle_qt = int(-obj.start_angle * 16)  # Инверсия
+        span_angle_qt = int(-obj.span_angle * 16)    # Инверсия
+        
+        painter.drawArc(rect, start_angle_qt, span_angle_qt)
+    
+    def _draw_rectangle(self, painter: QPainter, obj: Rectangle, pen: QPen):
+        """Отрисовывает прямоугольник."""
+        # Преобразуем все 4 угла в экранные координаты
+        corners = obj.corners
+        screen_corners = [self.map_from_scene(QPointF(c.x, c.y)) for c in corners]
+        
+        # Рисуем 4 стороны
+        for i in range(4):
+            painter.drawLine(screen_corners[i], screen_corners[(i + 1) % 4])
+    
+    def _draw_ellipse(self, painter: QPainter, obj: Ellipse, pen: QPen):
+        """Отрисовывает эллипс."""
+        center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
+        radius_x_screen = obj.radius_x * self.zoom_factor
+        radius_y_screen = obj.radius_y * self.zoom_factor
+        
+        rect = QRectF(
+            center_screen.x() - radius_x_screen,
+            center_screen.y() - radius_y_screen,
+            radius_x_screen * 2,
+            radius_y_screen * 2
+        )
+        painter.drawEllipse(rect)
+    
+    def _draw_polygon(self, painter: QPainter, obj: Polygon, pen: QPen):
+        """Отрисовывает многоугольник."""
+        vertices = obj.vertices
+        screen_vertices = [self.map_from_scene(QPointF(v.x, v.y)) for v in vertices]
+        
+        # Рисуем все стороны
+        for i in range(len(screen_vertices)):
+            painter.drawLine(screen_vertices[i], screen_vertices[(i + 1) % len(screen_vertices)])
+    
+    def _draw_spline(self, painter: QPainter, obj: Spline, pen: QPen):
+        """Отрисовывает сплайн."""
+        curve_points = obj.get_curve_points()
+        
+        if len(curve_points) < 2:
+            return
+        
+        # Создаём путь для плавной кривой
+        path = QPainterPath()
+        first_screen = self.map_from_scene(QPointF(curve_points[0].x, curve_points[0].y))
+        path.moveTo(first_screen)
+        
+        for point in curve_points[1:]:
+            screen_point = self.map_from_scene(QPointF(point.x, point.y))
+            path.lineTo(screen_point)
+        
+        painter.drawPath(path)
     
     def _draw_selection(self, painter: QPainter):
         """Отрисовывает выделенные объекты поверх основных."""
@@ -769,40 +1060,255 @@ class CanvasWidget(QWidget):
             return
 
         # Перо для выделения: Оранжевый пунктир, рисуется поверх
-        pen = QPen(QColor("#FFA500")) # Orange
+        pen = QPen(QColor("#FFA500"))  # Orange
         pen.setWidth(2)
         pen.setCosmetic(True)
         pen.setStyle(Qt.PenStyle.DashLine) 
 
         painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        
+        handle_size = 4
+        handle_color = QColor("#FFA500")
         
         for obj in self.selected_objects:
+            # Рисуем контур объекта пунктиром
             if isinstance(obj, Line):
-                # Для выделения рисуем линию поверх оригинала
                 start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
                 end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
                 painter.drawLine(start_screen, end_screen)
-                
-                # Опционально: Рисуем "ручки" (квадратики) на концах
-                handle_size = 4
-                painter.fillRect(start_screen.x() - handle_size, start_screen.y() - handle_size, handle_size*2, handle_size*2, QColor("#FFA500"))
-                painter.fillRect(end_screen.x() - handle_size, end_screen.y() - handle_size, handle_size*2, handle_size*2, QColor("#FFA500"))
+            elif isinstance(obj, Circle):
+                center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
+                radius_screen = obj.radius * self.zoom_factor
+                rect = QRectF(
+                    center_screen.x() - radius_screen,
+                    center_screen.y() - radius_screen,
+                    radius_screen * 2,
+                    radius_screen * 2
+                )
+                painter.drawEllipse(rect)
+            elif isinstance(obj, Arc):
+                center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
+                radius_screen = obj.radius * self.zoom_factor
+                rect = QRectF(
+                    center_screen.x() - radius_screen,
+                    center_screen.y() - radius_screen,
+                    radius_screen * 2,
+                    radius_screen * 2
+                )
+                start_angle_qt = int(-obj.start_angle * 16)
+                span_angle_qt = int(-obj.span_angle * 16)
+                painter.drawArc(rect, start_angle_qt, span_angle_qt)
+            elif isinstance(obj, Rectangle):
+                corners = obj.corners
+                screen_corners = [self.map_from_scene(QPointF(c.x, c.y)) for c in corners]
+                for i in range(4):
+                    painter.drawLine(screen_corners[i], screen_corners[(i + 1) % 4])
+            elif isinstance(obj, Ellipse):
+                center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
+                radius_x_screen = obj.radius_x * self.zoom_factor
+                radius_y_screen = obj.radius_y * self.zoom_factor
+                rect = QRectF(
+                    center_screen.x() - radius_x_screen,
+                    center_screen.y() - radius_y_screen,
+                    radius_x_screen * 2,
+                    radius_y_screen * 2
+                )
+                painter.drawEllipse(rect)
+            elif isinstance(obj, Polygon):
+                vertices = obj.vertices
+                screen_vertices = [self.map_from_scene(QPointF(v.x, v.y)) for v in vertices]
+                for i in range(len(screen_vertices)):
+                    painter.drawLine(screen_vertices[i], screen_vertices[(i + 1) % len(screen_vertices)])
+            elif isinstance(obj, Spline):
+                curve_points = obj.get_curve_points()
+                if len(curve_points) >= 2:
+                    path = QPainterPath()
+                    first_screen = self.map_from_scene(QPointF(curve_points[0].x, curve_points[0].y))
+                    path.moveTo(first_screen)
+                    for point in curve_points[1:]:
+                        screen_point = self.map_from_scene(QPointF(point.x, point.y))
+                        path.lineTo(screen_point)
+                    painter.drawPath(path)
+            
+            # Рисуем контрольные точки (ручки) для редактирования
+            control_points = obj.get_control_points()
+            for cp in control_points:
+                cp_screen = self.map_from_scene(QPointF(cp.x, cp.y))
+                painter.fillRect(
+                    int(cp_screen.x() - handle_size), 
+                    int(cp_screen.y() - handle_size), 
+                    handle_size * 2, 
+                    handle_size * 2, 
+                    handle_color
+                )
 
     def _draw_preview(self, painter: QPainter):
-        if self.start_pos and self.current_pos:
-            pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            
+        """Отрисовывает превью примитива при построении."""
+        if not self.start_pos or not self.current_pos:
+            return
+        
+        pen = QPen(QColor("#7A86CC"), 1, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        
+        active_tool = self.get_active_drawing_tool()
+        
+        start_scene_pos = self.map_to_scene(self.start_pos)
+        current_scene_pos = self.map_to_scene(self.current_pos)
+        
+        if active_tool == 'line':
             if self._current_construction_mode == "polar":
-                # В полярном режиме вычисляем конечную точку из полярных координат
-                start_scene_pos = self.map_to_scene(self.start_pos)
-                current_scene_pos = self.map_to_scene(self.current_pos)
                 end_point = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
                 end_screen = self.map_from_scene(end_point)
                 painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
             else:
-                # В декартовом режиме рисуем прямую линию
                 painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+        
+        elif active_tool == 'circle':
+            # Получаем метод построения
+            circle_method = "center_radius"
+            if self.circle_input_panel:
+                circle_method = self.circle_input_panel.get_current_method()
+            
+            if circle_method in ("center_radius", "center_diameter"):
+                # Окружность: start = центр, current = точка на окружности
+                center_screen = self.start_pos
+                radius = math.sqrt(
+                    (self.current_pos.x() - self.start_pos.x()) ** 2 +
+                    (self.current_pos.y() - self.start_pos.y()) ** 2
+                )
+                rect = QRectF(
+                    center_screen.x() - radius,
+                    center_screen.y() - radius,
+                    radius * 2,
+                    radius * 2
+                )
+                painter.drawEllipse(rect)
+                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+            
+            elif circle_method == "two_points":
+                # Две точки = диаметр
+                p1_screen = self.start_pos
+                p2_screen = self.current_pos
+                center_x = (p1_screen.x() + p2_screen.x()) / 2
+                center_y = (p1_screen.y() + p2_screen.y()) / 2
+                radius = math.sqrt(
+                    (p2_screen.x() - p1_screen.x()) ** 2 +
+                    (p2_screen.y() - p1_screen.y()) ** 2
+                ) / 2
+                rect = QRectF(center_x - radius, center_y - radius, radius * 2, radius * 2)
+                painter.drawEllipse(rect)
+                painter.drawLine(p1_screen.toPoint(), p2_screen.toPoint())
+            
+            elif circle_method == "three_points":
+                # Рисуем уже собранные точки и линии между ними
+                all_points = list(self.construction_points)
+                if len(all_points) > 0:
+                    # Добавляем текущую позицию курсора
+                    current_pt = Point(current_scene_pos.x(), current_scene_pos.y())
+                    all_points.append(current_pt)
+                    
+                    # Рисуем точки
+                    for pt in all_points:
+                        screen_pt = self.map_from_scene(QPointF(pt.x, pt.y))
+                        painter.drawEllipse(screen_pt, 4, 4)
+                    
+                    # Если есть 3 точки - пытаемся нарисовать окружность
+                    if len(all_points) >= 3:
+                        try:
+                            temp_circle = Circle.from_three_points(all_points[0], all_points[1], all_points[2])
+                            center_screen = self.map_from_scene(QPointF(temp_circle.center.x, temp_circle.center.y))
+                            radius_screen = temp_circle.radius * self.zoom_factor
+                            rect = QRectF(
+                                center_screen.x() - radius_screen,
+                                center_screen.y() - radius_screen,
+                                radius_screen * 2,
+                                radius_screen * 2
+                            )
+                            painter.drawEllipse(rect)
+                        except:
+                            # Если точки на одной прямой - просто рисуем линии между ними
+                            for i in range(len(all_points) - 1):
+                                p1_screen = self.map_from_scene(QPointF(all_points[i].x, all_points[i].y))
+                                p2_screen = self.map_from_scene(QPointF(all_points[i+1].x, all_points[i+1].y))
+                                painter.drawLine(p1_screen.toPoint(), p2_screen.toPoint())
+        
+        elif active_tool == 'rectangle':
+            # Прямоугольник: два угла
+            x1, y1 = self.start_pos.x(), self.start_pos.y()
+            x2, y2 = self.current_pos.x(), self.current_pos.y()
+            rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+            painter.drawRect(rect)
+        
+        elif active_tool == 'ellipse':
+            # Эллипс: start = центр, current определяет радиусы
+            center_screen = self.start_pos
+            radius_x = abs(self.current_pos.x() - self.start_pos.x())
+            radius_y = abs(self.current_pos.y() - self.start_pos.y())
+            rect = QRectF(
+                center_screen.x() - radius_x,
+                center_screen.y() - radius_y,
+                radius_x * 2,
+                radius_y * 2
+            )
+            painter.drawEllipse(rect)
+        
+        elif active_tool == 'polygon':
+            # Многоугольник: start = центр, current определяет радиус
+            center = Point(start_scene_pos.x(), start_scene_pos.y())
+            current_pt = Point(current_scene_pos.x(), current_scene_pos.y())
+            radius = center.distance_to(current_pt)
+            if radius > 0:
+                # Создаём временный многоугольник для превью
+                temp_polygon = Polygon(center, radius, num_sides=6)
+                vertices = temp_polygon.vertices
+                screen_vertices = [self.map_from_scene(QPointF(v.x, v.y)) for v in vertices]
+                for i in range(len(screen_vertices)):
+                    painter.drawLine(screen_vertices[i], screen_vertices[(i + 1) % len(screen_vertices)])
+        
+        elif active_tool == 'arc':
+            # Дуга: превью как окружность + начальный угол
+            center_screen = self.start_pos
+            radius = math.sqrt(
+                (self.current_pos.x() - self.start_pos.x()) ** 2 +
+                (self.current_pos.y() - self.start_pos.y()) ** 2
+            )
+            if radius > 0:
+                rect = QRectF(
+                    center_screen.x() - radius,
+                    center_screen.y() - radius,
+                    radius * 2,
+                    radius * 2
+                )
+                # Рисуем дугу 90 градусов от текущего угла
+                angle = math.degrees(math.atan2(
+                    self.start_pos.y() - self.current_pos.y(),
+                    self.current_pos.x() - self.start_pos.x()
+                ))
+                start_angle_qt = int(angle * 16)
+                span_angle_qt = int(90 * 16)
+                painter.drawArc(rect, start_angle_qt, span_angle_qt)
+                # Рисуем радиус-линию
+                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+        
+        elif active_tool == 'spline':
+            # Сплайн: рисуем накопленные точки и текущую
+            if hasattr(self, '_spline_points') and self._spline_points:
+                # Рисуем уже добавленные точки
+                for i, pt in enumerate(self._spline_points):
+                    screen_pt = self.map_from_scene(QPointF(pt.x, pt.y))
+                    painter.drawEllipse(screen_pt, 3, 3)
+                    if i > 0:
+                        prev_pt = self._spline_points[i - 1]
+                        prev_screen = self.map_from_scene(QPointF(prev_pt.x, prev_pt.y))
+                        painter.drawLine(prev_screen.toPoint(), screen_pt.toPoint())
+                
+                # Рисуем линию от последней точки к курсору
+                last_pt = self._spline_points[-1]
+                last_screen = self.map_from_scene(QPointF(last_pt.x, last_pt.y))
+                painter.drawLine(last_screen.toPoint(), self.current_pos.toPoint())
     
     def _calculate_end_point_polar(self, start_scene: QPointF, cursor_scene: QPointF) -> QPointF:
         """
@@ -1276,25 +1782,112 @@ class CanvasWidget(QWidget):
         """
         # Преобразуем cursor_pos в сценовые координаты
         scene_cursor_pos = self.map_to_scene(cursor_pos)
-        cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
         
         # Проверяем все объекты сцены на попадание
         nearest_object = None
-        min_distance_sq = self.selection_threshold ** 2  # Квадрат порогового расстояния
+        # Толерантность в сценовых координатах (учитываем zoom)
+        tolerance = self.selection_threshold / self.zoom_factor
+        min_distance = tolerance
         
         for obj in self.scene.objects:
-            if isinstance(obj, Line):
-                start_qpoint = QPointF(obj.start.x, obj.start.y)
-                end_qpoint = QPointF(obj.end.x, obj.end.y)
-                
-                # Используем существующую логику distance_point_to_segment_sq
-                distance_sq = distance_point_to_segment_sq(cursor_qpoint, start_qpoint, end_qpoint)
-                
-                if distance_sq < min_distance_sq:
-                    min_distance_sq = distance_sq
-                    nearest_object = obj
+            # Используем унифицированный метод distance_to_point из GeometricPrimitive
+            distance = obj.distance_to_point(scene_cursor_pos.x(), scene_cursor_pos.y())
+            
+            if distance < min_distance:
+                min_distance = distance
+                nearest_object = obj
         
         return nearest_object
+    
+    def _update_snap_point(self, screen_pos: QPointF):
+        """
+        Ищет ближайшую точку привязки к позиции курсора.
+        Обновляет self.current_snap_point.
+        """
+        if not snap_manager.enabled:
+            self.current_snap_point = None
+            return
+        
+        scene_pos = self.map_to_scene(screen_pos)
+        tolerance = snap_manager.snap_radius / self.zoom_factor
+        
+        snap_point = snap_manager.find_snap(
+            scene_pos.x(), scene_pos.y(),
+            self.scene.objects,
+            tolerance
+        )
+        
+        # Обновляем только если изменилось
+        if snap_point != self.current_snap_point:
+            self.current_snap_point = snap_point
+            self.update()
+    
+    def _draw_snap_indicator(self, painter: QPainter):
+        """
+        Отрисовывает индикатор текущей точки привязки.
+        Разные типы привязок отображаются разными символами.
+        """
+        if not self.current_snap_point or not snap_manager.enabled:
+            return
+        
+        sp = self.current_snap_point
+        screen_pos = self.map_from_scene(QPointF(sp.x, sp.y))
+        x, y = int(screen_pos.x()), int(screen_pos.y())
+        size = 8  # Размер индикатора в пикселях
+        
+        # Цвет индикатора - яркий жёлтый/золотой
+        snap_color = QColor("#FFD700")
+        pen = QPen(snap_color, 2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        
+        # Рисуем разные символы в зависимости от типа привязки
+        if sp.snap_type == SnapType.ENDPOINT:
+            # Квадрат для конечных точек
+            painter.drawRect(x - size, y - size, size * 2, size * 2)
+        elif sp.snap_type == SnapType.MIDPOINT:
+            # Треугольник для середины
+            from PySide6.QtGui import QPolygonF
+            triangle = QPolygonF([
+                QPointF(x, y - size),
+                QPointF(x - size, y + size),
+                QPointF(x + size, y + size)
+            ])
+            painter.drawPolygon(triangle)
+        elif sp.snap_type == SnapType.CENTER:
+            # Круг с крестом для центра
+            painter.drawEllipse(x - size, y - size, size * 2, size * 2)
+            painter.drawLine(x - size//2, y, x + size//2, y)
+            painter.drawLine(x, y - size//2, x, y + size//2)
+        elif sp.snap_type == SnapType.QUADRANT:
+            # Ромб для квадрантов
+            from PySide6.QtGui import QPolygonF
+            diamond = QPolygonF([
+                QPointF(x, y - size),
+                QPointF(x + size, y),
+                QPointF(x, y + size),
+                QPointF(x - size, y)
+            ])
+            painter.drawPolygon(diamond)
+        elif sp.snap_type == SnapType.NODE:
+            # Крест для узлов (сплайн)
+            painter.drawLine(x - size, y - size, x + size, y + size)
+            painter.drawLine(x - size, y + size, x + size, y - size)
+        elif sp.snap_type == SnapType.INTERSECTION:
+            # X для пересечений
+            painter.drawLine(x - size, y - size, x + size, y + size)
+            painter.drawLine(x - size, y + size, x + size, y - size)
+        elif sp.snap_type == SnapType.PERPENDICULAR:
+            # Перпендикуляр (угол 90°)
+            painter.drawLine(x - size, y, x, y)
+            painter.drawLine(x, y, x, y - size)
+        elif sp.snap_type == SnapType.TANGENT:
+            # Касательная (круг с линией)
+            painter.drawEllipse(x - size//2, y - size//2, size, size)
+            painter.drawLine(x - size, y + size//2, x + size, y + size//2)
+        else:
+            # По умолчанию - круг
+            painter.drawEllipse(x - size, y - size, size * 2, size * 2)
     
     def get_view_state(self):
         """Возвращает текущее состояние вида для сохранения."""

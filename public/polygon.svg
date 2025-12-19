@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 43.75 43.75">
+  <!-- Regular hexagon -->
+  <polygon points="21.875,3 38.5,12.5 38.5,31.25 21.875,40.75 5.25,31.25 5.25,12.5" fill="none" stroke="#000" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="21.875" cy="21.875" r="1.5" fill="#000"/>
+</svg>
