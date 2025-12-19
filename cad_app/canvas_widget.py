@@ -614,32 +614,40 @@ class CanvasWidget(QWidget):
                     
                     click_point = Point(click_scene_pos.x(), click_scene_pos.y())
                     
+                    corner_radius = 0.0
+                    chamfer_size = 0.0
+                    if self.rectangle_input_panel:
+                        corner_radius, chamfer_size = self.rectangle_input_panel._get_corner_params()
+                    
                     if rect_method == "two_points":
                         # Две противоположные точки
                         p1 = Point(start_scene_pos.x(), start_scene_pos.y())
                         if p1.x != click_point.x and p1.y != click_point.y:
-                            obj = Rectangle(p1, click_point, style_name=current_style)
+                            obj = Rectangle(p1, click_point, style_name=current_style,
+                                          corner_radius=corner_radius, chamfer_size=chamfer_size)
                             self.scene.add_object(obj)
                     
                     elif rect_method == "center_size":
-                        # Центр + размер (расстояние до курсора = полуширина/полувысота)
+                        # Центр + размер
                         center = Point(start_scene_pos.x(), start_scene_pos.y())
                         half_w = abs(click_point.x - center.x)
                         half_h = abs(click_point.y - center.y)
                         if half_w > 0 and half_h > 0:
                             p1 = Point(center.x - half_w, center.y - half_h)
                             p2 = Point(center.x + half_w, center.y + half_h)
-                            obj = Rectangle(p1, p2, style_name=current_style)
+                            obj = Rectangle(p1, p2, style_name=current_style,
+                                          corner_radius=corner_radius, chamfer_size=chamfer_size)
                             self.scene.add_object(obj)
                     
                     elif rect_method == "point_size":
-                        # Точка + размер (курсор определяет размеры)
+                        # Точка + размер
                         p1 = Point(start_scene_pos.x(), start_scene_pos.y())
                         width = click_point.x - p1.x
                         height = click_point.y - p1.y
                         if width != 0 and height != 0:
                             p2 = Point(p1.x + width, p1.y + height)
-                            obj = Rectangle(p1, p2, style_name=current_style)
+                            obj = Rectangle(p1, p2, style_name=current_style,
+                                          corner_radius=corner_radius, chamfer_size=chamfer_size)
                             self.scene.add_object(obj)
                 
                 elif active_tool == 'ellipse':
@@ -1174,14 +1182,48 @@ class CanvasWidget(QWidget):
         painter.drawArc(rect, start_angle_qt, span_angle_qt)
     
     def _draw_rectangle(self, painter: QPainter, obj: Rectangle, pen: QPen):
-        """Отрисовывает прямоугольник."""
-        # Преобразуем все 4 угла в экранные координаты
-        corners = obj.corners
-        screen_corners = [self.map_from_scene(QPointF(c.x, c.y)) for c in corners]
+        """Отрисовывает прямоугольник с учетом скруглений и фасок."""
+        # Преобразуем координаты в экранные
+        p1_screen = self.map_from_scene(QPointF(obj.left, obj.top))
+        p2_screen = self.map_from_scene(QPointF(obj.right, obj.bottom))
         
-        # Рисуем 4 стороны
-        for i in range(4):
-            painter.drawLine(screen_corners[i], screen_corners[(i + 1) % 4])
+        # QRectF требует (x, y, w, h), причем w и h должны быть положительными
+        x = min(p1_screen.x(), p2_screen.x())
+        y = min(p1_screen.y(), p2_screen.y())
+        w = abs(p1_screen.x() - p2_screen.x())
+        h = abs(p1_screen.y() - p2_screen.y())
+        
+        rect = QRectF(x, y, w, h)
+        
+        # Масштабируем параметры углов
+        radius = obj.corner_radius * self.zoom_factor
+        chamfer = obj.chamfer_size * self.zoom_factor
+        
+        # Ограничиваем размер фаски/радиуса половиной стороны, чтобы не ломалась отрисовка
+        limit = min(w, h) / 2
+        
+        if radius > 0:
+            r = min(radius, limit)
+            painter.drawRoundedRect(rect, r, r)
+            
+        elif chamfer > 0:
+            c = min(chamfer, limit)
+            
+            # Рисуем фаску вручную через путь
+            path = QPainterPath()
+            path.moveTo(x, y + c)           # Левый верхний (начало скругления)
+            path.lineTo(x + c, y)           # Левый верхний (конец скругления)
+            path.lineTo(x + w - c, y)       # Правый верхний
+            path.lineTo(x + w, y + c)
+            path.lineTo(x + w, y + h - c)   # Правый нижний
+            path.lineTo(x + w - c, y + h)
+            path.lineTo(x + c, y + h)       # Левый нижний
+            path.lineTo(x, y + h - c)
+            path.closeSubpath()
+            
+            painter.drawPath(path)
+        else:
+            painter.drawRect(rect)
     
     def _draw_ellipse(self, painter: QPainter, obj: Ellipse, pen: QPen):
         """Отрисовывает эллипс."""
@@ -1411,22 +1453,56 @@ class CanvasWidget(QWidget):
             if self.rectangle_input_panel:
                 rect_method = self.rectangle_input_panel.get_current_method()
             
+            rect = QRectF()
             if rect_method == "two_points" or rect_method == "point_size":
-                # Две противоположные точки или точка+размер
                 x1, y1 = self.start_pos.x(), self.start_pos.y()
                 x2, y2 = self.current_pos.x(), self.current_pos.y()
                 rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-                painter.drawRect(rect)
             
             elif rect_method == "center_size":
-                # Центр + размер
                 cx, cy = self.start_pos.x(), self.start_pos.y()
                 half_w = abs(self.current_pos.x() - cx)
                 half_h = abs(self.current_pos.y() - cy)
                 rect = QRectF(cx - half_w, cy - half_h, half_w * 2, half_h * 2)
-                painter.drawRect(rect)
-                # Рисуем центр
                 painter.drawEllipse(self.start_pos, 3, 3)
+
+            # Получаем параметры углов из панели
+            corner_radius = 0.0
+            chamfer_size = 0.0
+            if self.rectangle_input_panel:
+                corner_radius, chamfer_size = self.rectangle_input_panel._get_corner_params()
+            
+            # Рисуем с учетом углов (логика дублируется из _draw_rectangle для превью)
+            # Масштабировать не нужно, так как мы уже в экранных координатах рисования?
+            # НЕТ! Параметры corner_radius/chamfer из панели приходят в ЕДИНИЦАХ СЦЕНЫ (мм).
+            # А rect у нас сейчас в ЭКРАННЫХ КООРДИНАТАХ.
+            # Значит, нужно умножить радиус/фаску на self.zoom_factor.
+            
+            radius_screen = corner_radius * self.zoom_factor
+            chamfer_screen = chamfer_size * self.zoom_factor
+            
+            w, h = rect.width(), rect.height()
+            limit = min(w, h) / 2 if (w > 0 and h > 0) else 0
+            
+            if radius_screen > 0 and limit > 0:
+                r = min(radius_screen, limit)
+                painter.drawRoundedRect(rect, r, r)
+            elif chamfer_screen > 0 and limit > 0:
+                c = min(chamfer_screen, limit)
+                x, y = rect.x(), rect.y()
+                path = QPainterPath()
+                path.moveTo(x, y + c)
+                path.lineTo(x + c, y)
+                path.lineTo(x + w - c, y)
+                path.lineTo(x + w, y + c)
+                path.lineTo(x + w, y + h - c)
+                path.lineTo(x + w - c, y + h)
+                path.lineTo(x + c, y + h)
+                path.lineTo(x, y + h - c)
+                path.closeSubpath()
+                painter.drawPath(path)
+            else:
+                painter.drawRect(rect)
         
         elif active_tool == 'ellipse':
             # Получаем метод построения

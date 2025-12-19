@@ -69,6 +69,48 @@ class RectangleInputPanel(QWidget):
         self.input_layout.setSpacing(12)
         main_layout.addWidget(self.input_container)
         
+        # Разделитель перед настройками углов
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.Shape.VLine)
+        separator2.setStyleSheet("color: #1EFFFFFF;")
+        separator2.setMaximumWidth(1)
+        main_layout.addWidget(separator2)
+
+        # Контейнер для настроек углов
+        corners_container = QWidget()
+        corners_layout = QVBoxLayout(corners_container)
+        corners_layout.setContentsMargins(0, 0, 0, 0)
+        corners_layout.setSpacing(4)
+        
+        corners_label = QLabel("Обработка углов:")
+        corners_label.setStyleSheet("color: #99FFFFFF; font-size: 12px;")
+        corners_layout.addWidget(corners_label)
+        
+        corners_controls = QWidget()
+        corners_controls_layout = QHBoxLayout(corners_controls)
+        corners_controls_layout.setContentsMargins(0, 0, 0, 0)
+        corners_controls_layout.setSpacing(8)
+        
+        self.corner_type_combo = QComboBox()
+        self.corner_type_combo.addItems(["Прямые", "Скругление", "Фаска"])
+        self.corner_type_combo.setMinimumWidth(110)
+        corners_controls_layout.addWidget(self.corner_type_combo)
+        
+        self.corner_value_input = QLineEdit()
+        self.corner_value_input.setPlaceholderText("0.00")
+        self.corner_value_input.setFixedWidth(70)
+        self.corner_value_input.setEnabled(False) 
+        
+        validator = QDoubleValidator()
+        validator.setRange(0.0, 1000000.0)
+        validator.setDecimals(2)
+        self.corner_value_input.setValidator(validator)
+        
+        corners_controls_layout.addWidget(self.corner_value_input)
+        corners_layout.addWidget(corners_controls)
+        
+        main_layout.addWidget(corners_container)
+        
         # Кнопка построить
         main_layout.addStretch()
         
@@ -114,7 +156,39 @@ class RectangleInputPanel(QWidget):
     
     def _connect_signals(self):
         self.method_combo.currentIndexChanged.connect(self._on_method_changed)
+        self.corner_type_combo.currentIndexChanged.connect(self._on_corner_type_changed)
         self.build_button.clicked.connect(self._on_build_clicked)
+    
+    def _on_corner_type_changed(self, index):
+        if index == 0: # Прямые
+            self.corner_value_input.setEnabled(False)
+            self.corner_value_input.clear()
+            self.corner_value_input.setPlaceholderText("0.00")
+        elif index == 1: # Скругление
+            self.corner_value_input.setEnabled(True)
+            self.corner_value_input.setPlaceholderText("Радиус")
+            self.corner_value_input.setFocus()
+        elif index == 2: # Фаска
+            self.corner_value_input.setEnabled(True)
+            self.corner_value_input.setPlaceholderText("Катет")
+            self.corner_value_input.setFocus()
+            
+    def _get_corner_params(self):
+        """Возвращает (corner_radius, chamfer_size)"""
+        idx = self.corner_type_combo.currentIndex()
+        val_text = self.corner_value_input.text()
+        val = self._parse_float(val_text) if val_text else 0.0
+        
+        corner_radius = 0.0
+        chamfer_size = 0.0
+        
+        if val is not None and val > 0:
+            if idx == 1: # Скругление
+                corner_radius = val
+            elif idx == 2: # Фаска
+                chamfer_size = val
+                
+        return corner_radius, chamfer_size
     
     def _on_method_changed(self, index):
         self._current_method = self.method_combo.currentData()
@@ -218,6 +292,7 @@ class RectangleInputPanel(QWidget):
     def _on_build_clicked(self):
         try:
             rect = None
+            corner_radius, chamfer_size = self._get_corner_params()
             
             if self._current_method == "two_points":
                 x1 = self._parse_float(self.coord_inputs["X₁"].text())
@@ -228,7 +303,8 @@ class RectangleInputPanel(QWidget):
                 if any(v is None for v in [x1, y1, x2, y2]):
                     return
                 
-                rect = Rectangle(Point(x1, y1), Point(x2, y2))
+                rect = Rectangle(Point(x1, y1), Point(x2, y2), 
+                               corner_radius=corner_radius, chamfer_size=chamfer_size)
             
             elif self._current_method == "point_size":
                 x = self._parse_float(self.coord_inputs["X"].text())
@@ -239,7 +315,8 @@ class RectangleInputPanel(QWidget):
                 if any(v is None for v in [x, y, w, h]) or w <= 0 or h <= 0:
                     return
                 
-                rect = Rectangle(Point(x, y), Point(x + w, y + h))
+                rect = Rectangle(Point(x, y), Point(x + w, y + h),
+                               corner_radius=corner_radius, chamfer_size=chamfer_size)
             
             elif self._current_method == "center_size":
                 xc = self._parse_float(self.coord_inputs["Xc"].text())
@@ -250,11 +327,14 @@ class RectangleInputPanel(QWidget):
                 if any(v is None for v in [xc, yc, w, h]) or w <= 0 or h <= 0:
                     return
                 
-                rect = Rectangle(Point(xc - w/2, yc - h/2), Point(xc + w/2, yc + h/2))
+                rect = Rectangle(Point(xc - w/2, yc - h/2), Point(xc + w/2, yc + h/2),
+                               corner_radius=corner_radius, chamfer_size=chamfer_size)
             
             if rect:
                 self.rectangle_requested.emit(rect)
                 self._clear_inputs()
+                # Не очищаем настройки углов, чтобы можно было строить серию одинаковых фигур
+                # self.corner_value_input.clear()
                 
         except Exception as e:
             print(f"Ошибка при построении прямоугольника: {e}")
