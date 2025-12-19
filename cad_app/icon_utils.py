@@ -43,15 +43,44 @@ def load_svg_icon(svg_path: str, color: str = "#FFFFFF") -> QIcon:
     absolute_path = get_resource_path(svg_path)
     
     # Читаем SVG файл
-    with open(absolute_path, 'r', encoding='utf-8') as f:
-        svg_content = f.read()
+    try:
+        with open(absolute_path, 'r', encoding='utf-8') as f:
+            svg_content = f.read()
+    except Exception as e:
+        print(f"Error loading SVG {svg_path}: {e}")
+        return QIcon()
     
-    # Заменяем fill и stroke на нужный цвет
-    svg_content = re.sub(r'fill="[^"]*"', '', svg_content)
-    svg_content = re.sub(r'stroke="[^"]*"', '', svg_content)
-    
-    # Добавляем fill к path элементам
-    svg_content = svg_content.replace('<path', f'<path fill="{color}"')
+    def repl_tag(match):
+        tag = match.group(0)
+        
+        # 1. Обработка fill
+        if 'fill="' in tag:
+            def repl_fill(m):
+                if m.group(1).lower() == 'none':
+                    return m.group(0)
+                return f'fill="{color}"'
+            tag = re.sub(r'fill="([^"]*)"', repl_fill, tag)
+        else:
+            # Если fill отсутствует, по стандарту SVG он черный.
+            # Мы хотим перекрасить в наш цвет, поэтому добавляем атрибут.
+            if '/>' in tag:
+                tag = tag.replace('/>', f' fill="{color}" />')
+            elif '>' in tag:
+                tag = tag.replace('>', f' fill="{color}">')
+
+        # 2. Обработка stroke
+        if 'stroke="' in tag:
+            def repl_stroke(m):
+                if m.group(1).lower() == 'none':
+                    return m.group(0)
+                return f'stroke="{color}"'
+            tag = re.sub(r'stroke="([^"]*)"', repl_stroke, tag)
+            
+        return tag
+
+    # Применяем замену ко всем основным графическим примитивам
+    pattern = r'<(path|circle|rect|ellipse|line|polyline|polygon)[^>]*>'
+    svg_content = re.sub(pattern, repl_tag, svg_content)
     
     # Создаем QPixmap из модифицированного SVG
     renderer = QSvgRenderer(svg_content.encode('utf-8'))
