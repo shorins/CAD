@@ -64,7 +64,13 @@ class CanvasWidget(QWidget):
         self.current_pos = None
         self.pan_start_pos = None
         self.camera_pos = QPointF(0, 0)
+        self.camera_pos = QPointF(0, 0)
         self._initial_center_done = False
+        
+        # Переменные для перетаскивания контрольных точек
+        self.dragging_object = None
+        self.dragging_point_index = None
+        self.dragging_start_pos = None
         
         # Для режима удаления
         self.highlighted_line = None  # Линия, которая выделена при наведении (красная, для удаления)
@@ -737,7 +743,6 @@ class CanvasWidget(QWidget):
                         center = self._arc_center
                         radius = center.distance_to(click_point)
                         
-                        import math
                         # Вычисляем угол от центра к точке клика
                         angle = math.degrees(math.atan2(
                             click_point.y - center.y, click_point.x - center.x
@@ -822,6 +827,31 @@ class CanvasWidget(QWidget):
         # 3. Инструмент ВЫДЕЛЕНИЕ (если активен select_tool_action или никакой другой не активен)
         elif self.select_tool_action.isChecked() or (not self.pan_tool_active and not self.is_drawing_tool_active() and not self.delete_tool_action.isChecked()):
             if event.button() == Qt.MouseButton.LeftButton:
+                
+                # Проверяем клик по контрольной точке выделенных объектов для перетаскивания
+                if self.selected_objects:
+                    handle_click_threshold = 8.0  # Чуть больше, чем размер отрисовки (4)
+                    found_handle = False
+                    
+                    for obj in self.selected_objects:
+                        control_points = obj.get_control_points()
+                        for cp in control_points:
+                            cp_screen = self.map_from_scene(QPointF(cp.x, cp.y))
+                            dist = math.sqrt((cp_screen.x() - event.position().x())**2 + 
+                                           (cp_screen.y() - event.position().y())**2)
+                            
+                            if dist <= handle_click_threshold:
+                                self.dragging_object = obj
+                                self.dragging_point_index = cp.index
+                                self.dragging_start_pos = event.position()
+                                found_handle = True
+                                break
+                        if found_handle:
+                            break
+                    
+                    if found_handle:
+                        return
+
                 clicked_object = self._get_object_at_cursor(event.position())
                 
                 is_ctrl_pressed = event.modifiers() & Qt.KeyboardModifier.ControlModifier
@@ -848,6 +878,28 @@ class CanvasWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         self.cursor_pos_changed.emit(event.position())
+        
+        # Обработка перетаскивания контрольной точки
+        if self.dragging_object and self.dragging_point_index is not None:
+             new_scene_pos = self.map_to_scene(event.position())
+             
+             # Проверяем привязки
+             self._update_snap_point(event.position())
+             
+             if self.current_snap_point:
+                 target_x = self.current_snap_point.x
+                 target_y = self.current_snap_point.y
+             else:
+                 target_x = new_scene_pos.x()
+                 target_y = new_scene_pos.y()
+             
+             if self.dragging_object.move_control_point(self.dragging_point_index, target_x, target_y):
+                 self.scene.scene_changed.emit()
+                 # Обновляем панель свойств, чтобы значения в спинбоксах обновились
+                 self.selection_changed.emit(self.selected_objects)
+             
+             self.update()
+             return
         
         # Обработка панорамирования с pan tool (левая кнопка)
         if self.is_panning:
@@ -931,6 +983,12 @@ class CanvasWidget(QWidget):
             self._update_snap_point(event.position())
 
     def mouseReleaseEvent(self, event):
+        # Сброс перетаскивания контрольной точки
+        if self.dragging_object:
+            self.dragging_object = None
+            self.dragging_point_index = None
+            self.dragging_start_pos = None
+
         # Обработка отпускания левой кнопки при pan tool
         if self.is_panning and event.button() == Qt.MouseButton.LeftButton:
             self.is_panning = False
@@ -1772,87 +1830,104 @@ class CanvasWidget(QWidget):
     
     def _find_nearest_line(self, cursor_pos: QPointF):
         """
-        Находит ближайшую линию к курсору и устанавливает её как выделенную (для режима удаления).
+        Находит ближайший объект к курсору и устанавливает её как выделенную (для режима удаления).
         """
         scene_cursor_pos = self.map_to_scene(cursor_pos)
-        cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
         
-        nearest_line = None
-        min_distance_sq = self.selection_threshold ** 2  # Квадрат порогового расстояния
+        nearest_obj = None
+        # Учитываем зум при поиске
+        threshold = self.selection_threshold / self.zoom_factor
+        min_distance = threshold
         
         for obj in self.scene.objects:
-            if isinstance(obj, Line):
-                start_qpoint = QPointF(obj.start.x, obj.start.y)
-                end_qpoint = QPointF(obj.end.x, obj.end.y)
-                
-                # Вычисляем расстояние от курсора до отрезка
-                distance_sq = distance_point_to_segment_sq(cursor_qpoint, start_qpoint, end_qpoint)
-                
-                if distance_sq < min_distance_sq:
-                    min_distance_sq = distance_sq
-                    nearest_line = obj
+            # Универсальная проверка расстояния
+            distance = obj.distance_to_point(scene_cursor_pos.x(), scene_cursor_pos.y())
+            
+            if distance < min_distance:
+                min_distance = distance
+                nearest_obj = obj
         
         # Обновляем выделенную линию только если она изменилась
-        if nearest_line != self.highlighted_line:
-            self.highlighted_line = nearest_line
+        if nearest_obj != self.highlighted_line:
+            self.highlighted_line = nearest_obj
             self.update()
     
     def _find_hover_line(self, cursor_pos: QPointF):
         """
-        Находит ближайшую линию к курсору для hover подсветки (голубая).
+        Находит ближайший объект к курсору для hover подсветки (голубая).
         Работает независимо от активного инструмента.
         """
         scene_cursor_pos = self.map_to_scene(cursor_pos)
-        cursor_qpoint = QPointF(scene_cursor_pos.x(), scene_cursor_pos.y())
         
-        nearest_line = None
-        min_distance_sq = self.selection_threshold ** 2  # Квадрат порогового расстояния
+        nearest_obj = None
+        # Учитываем зум при поиске
+        threshold = self.selection_threshold / self.zoom_factor
+        min_distance = threshold
         
         for obj in self.scene.objects:
-            if isinstance(obj, Line):
-                start_qpoint = QPointF(obj.start.x, obj.start.y)
-                end_qpoint = QPointF(obj.end.x, obj.end.y)
-                
-                # Вычисляем расстояние от курсора до отрезка
-                distance_sq = distance_point_to_segment_sq(cursor_qpoint, start_qpoint, end_qpoint)
-                
-                if distance_sq < min_distance_sq:
-                    min_distance_sq = distance_sq
-                    nearest_line = obj
+            # Универсальная проверка расстояния
+            distance = obj.distance_to_point(scene_cursor_pos.x(), scene_cursor_pos.y())
+            
+            if distance < min_distance:
+                min_distance = distance
+                nearest_obj = obj
         
         # Обновляем hover линию только если она изменилась
-        if nearest_line != self.hover_highlighted_line:
-            self.hover_highlighted_line = nearest_line
+        if nearest_obj != self.hover_highlighted_line:
+            self.hover_highlighted_line = nearest_obj
             self.update()
     
     def _draw_hover_highlighted_line(self, painter: QPainter):
-        """Отрисовывает линию с hover подсветкой голубым цветом."""
+        """Отрисовывает объект с hover подсветкой голубым цветом."""
         if self.hover_highlighted_line:
             pen = QPen(QColor("#7ACCCC"), 3)  # Голубой цвет, толщина 3
             pen.setCosmetic(True)           # Корректная толщина при зуме
             pen.setStyle(Qt.PenStyle.SolidLine)
             painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             
-            start_screen = self.map_from_scene(QPointF(self.hover_highlighted_line.start.x, 
-                                                        self.hover_highlighted_line.start.y))
-            end_screen = self.map_from_scene(QPointF(self.hover_highlighted_line.end.x, 
-                                                      self.hover_highlighted_line.end.y))
-            # Рисуем одной командой вместо цикла Брезенхэма
-            painter.drawLine(start_screen, end_screen)
+            obj = self.hover_highlighted_line
+            # Отрисовка в зависимости от типа примитива
+            if isinstance(obj, Line):
+                self._draw_line(painter, obj, pen, 3)
+            elif isinstance(obj, Circle):
+                self._draw_circle(painter, obj, pen)
+            elif isinstance(obj, Arc):
+                self._draw_arc(painter, obj, pen)
+            elif isinstance(obj, Rectangle):
+                self._draw_rectangle(painter, obj, pen)
+            elif isinstance(obj, Ellipse):
+                self._draw_ellipse(painter, obj, pen)
+            elif isinstance(obj, Polygon):
+                self._draw_polygon(painter, obj, pen)
+            elif isinstance(obj, Spline):
+                self._draw_spline(painter, obj, pen)
     
     def _draw_highlighted_line(self, painter: QPainter):
-        """Отрисовывает выделенную линию красным цветом."""
+        """Отрисовывает выделенный для удаления объект красным цветом."""
         if self.highlighted_line and self.delete_tool_action.isChecked():
             pen = QPen(QColor("#FF4444"), 3)
             pen.setCosmetic(True)
             pen.setStyle(Qt.PenStyle.SolidLine)
             painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             
-            start_screen = self.map_from_scene(QPointF(self.highlighted_line.start.x, 
-                                                       self.highlighted_line.start.y))
-            end_screen = self.map_from_scene(QPointF(self.highlighted_line.end.x, 
-                                                     self.highlighted_line.end.y))
-            painter.drawLine(start_screen, end_screen)
+            obj = self.highlighted_line
+            # Отрисовка в зависимости от типа примитива
+            if isinstance(obj, Line):
+                self._draw_line(painter, obj, pen, 3)
+            elif isinstance(obj, Circle):
+                self._draw_circle(painter, obj, pen)
+            elif isinstance(obj, Arc):
+                self._draw_arc(painter, obj, pen)
+            elif isinstance(obj, Rectangle):
+                self._draw_rectangle(painter, obj, pen)
+            elif isinstance(obj, Ellipse):
+                self._draw_ellipse(painter, obj, pen)
+            elif isinstance(obj, Polygon):
+                self._draw_polygon(painter, obj, pen)
+            elif isinstance(obj, Spline):
+                self._draw_spline(painter, obj, pen)
     
     def _draw_rotation_indicator(self, painter: QPainter):
         """

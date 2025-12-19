@@ -3,7 +3,8 @@
 import sys
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStatusBar, 
-                               QToolBar, QLabel, QFileDialog, QComboBox, QWidget)
+                               QToolBar, QLabel, QFileDialog, QComboBox, QWidget,
+                               QDockWidget)
 from PySide6.QtGui import QAction, QIcon, QActionGroup, QPixmap, QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QSize
 
@@ -24,6 +25,7 @@ from .rectangle_input_panel import RectangleInputPanel
 from .ellipse_input_panel import EllipseInputPanel
 from .polygon_input_panel import PolygonInputPanel
 from .spline_input_panel import SplineInputPanel
+from .edit_panel import EditPanel
 from .icon_utils import load_svg_icon
 
 class MainWindow(QMainWindow):
@@ -64,6 +66,7 @@ class MainWindow(QMainWindow):
         self._create_toolbars()
         self._create_status_bar()
         self._create_line_input_panel()
+        self._create_edit_panel()  # Панель редактирования выделенных объектов
         
         # Связываем сигнал из Canvas с методом в StatusBar
         self.canvas.cursor_pos_changed.connect(self.update_cursor_pos_label)
@@ -97,8 +100,9 @@ class MainWindow(QMainWindow):
         self.polygon_tool_action.toggled.connect(self._on_tool_toggled)
         self.spline_tool_action.toggled.connect(self._on_tool_toggled)
 
-        # Связываем выделение с комбобоксом стилей
+        # Связываем выделение с комбобоксом стилей и панелью редактирования
         self.canvas.selection_changed.connect(self._update_style_combo_by_selection)
+        self.canvas.selection_changed.connect(self._update_edit_panel)
         # Обновляем список стилей при изменении менеджера
         style_manager.style_changed.connect(self._reload_styles_into_combo)
 
@@ -519,6 +523,42 @@ class MainWindow(QMainWindow):
         # Показываем панель для активного инструмента
         self._update_input_panels_visibility()
 
+    def _create_edit_panel(self):
+        """Создает панель редактирования выделенных объектов."""
+        self.edit_panel = EditPanel(self)
+        self.edit_panel.object_changed.connect(self._on_edit_panel_object_changed)
+        
+        # Создаём dock widget для панели редактирования
+        self.edit_dock = QDockWidget("Свойства объекта", self)
+        self.edit_dock.setWidget(self.edit_panel)
+        self.edit_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.edit_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable | 
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.edit_dock)
+        
+        # Изначально скрываем dock
+        self.edit_dock.hide()
+    
+    def _update_edit_panel(self, selected_objects: list):
+        """Обновляет панель редактирования для текущего выделения."""
+        if not hasattr(self, 'edit_panel'):
+            return
+        
+        self.edit_panel.update_for_selection(selected_objects)
+        
+        # Показываем/скрываем dock в зависимости от выделения
+        if selected_objects:
+            self.edit_dock.show()
+        else:
+            self.edit_dock.hide()
+    
+    def _on_edit_panel_object_changed(self):
+        """Обработчик изменения объекта через панель редактирования."""
+        self.scene.scene_changed.emit()
+        self.canvas.update()
+
     def _create_style_combo(self) -> QWidget:
         """
         Создает выпадающий список стилей линий для верхней панели инструментов.
@@ -593,8 +633,8 @@ class MainWindow(QMainWindow):
 
         if selected:
             for obj in selected:
-                if isinstance(obj, Line):
-                    obj.style_name = style_name
+                # Применяем стиль ко всем выделенным объектам (все GeometricPrimitive)
+                obj.style_name = style_name
             self.scene.scene_changed.emit()
             # Обновляем комбобокс после применения, чтобы отображать текущий стиль выделения
             self._update_style_combo_by_selection(selected)
@@ -622,7 +662,7 @@ class MainWindow(QMainWindow):
                 self.style_combo.setCurrentIndex(index)
         else:
             first_style = selected_objects[0].style_name
-            all_same = all(obj.style_name == first_style for obj in selected_objects if isinstance(obj, Line))
+            all_same = all(obj.style_name == first_style for obj in selected_objects)
 
             if all_same:
                 index = self.style_combo.findData(first_style)
