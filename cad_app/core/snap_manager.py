@@ -114,26 +114,15 @@ class SnapManager(QObject):
                   objects: List[GeometricPrimitive],
                   tolerance: float = 10.0,
                   exclude_object: Optional[GeometricPrimitive] = None,
-                  reference_point: Optional['Point'] = None) -> Optional[SnapPoint]:
+                  reference_point: Optional[tuple] = None) -> Optional[SnapPoint]:
         """
-        Ищет ближайшую точку привязки к заданным координатам.
-        
-        Args:
-            scene_x, scene_y: Координаты в сцене
-            objects: Список геометрических объектов для поиска
-            tolerance: Максимальное расстояние в сценовых единицах
-            exclude_object: Объект, который нужно исключить из поиска
-            reference_point: Точка отсчета для контекстных привязок (перпендикуляр, касательная)
-            
-        Returns:
-            Ближайшая точка привязки или None
+        Находит лучшую точку привязки.
         """
-        if not self.enabled or not self._active_snaps:
-            self._current_snap = None
+        if not self.enabled:
             return None
-        
-        best_snap: Optional[SnapPoint] = None
-        best_distance = tolerance
+            
+        best_snap = None
+        best_distance = float('inf')
         
         # Фильтруем объекты рядом с курсором для оптимизации
         nearby_objects = []
@@ -154,7 +143,10 @@ class SnapManager(QObject):
             # 2. Проверка по центру (если активен Center Snap)
             elif check_center and hasattr(obj, 'center'):
                  # Для Point из .geometry.point
-                 cx, cy = obj.center.x, obj.center.y
+                 # Используем getattr на случай если center это tuple (хотя вряд ли)
+                 cx = getattr(obj.center, 'x', obj.center[0] if isinstance(obj.center, (tuple, list)) else 0)
+                 cy = getattr(obj.center, 'y', obj.center[1] if isinstance(obj.center, (tuple, list)) else 0)
+                 
                  dist_center = math.sqrt((scene_x - cx)**2 + (scene_y - cy)**2)
                  if dist_center <= search_radius:
                      is_nearby = True
@@ -162,15 +154,23 @@ class SnapManager(QObject):
             if is_nearby:
                 nearby_objects.append(obj)
         
-        # 1. Стандартные привязки (Endpoint, Midpoint, Center, Quadrant, Node)
+        # 1. Стандартные привязки (Endpoint, Midpoint, Center, Quadrant, Node, Nearest)
         for obj in nearby_objects:
-            snap_points = obj.get_snap_points()
-            for sp in snap_points:
+            points = obj.get_snap_points()
+            
+            # Добавляем Nearest если нужно
+            if SnapType.NEAREST in self._active_snaps:
+                nearest = obj.get_nearest_point(scene_x, scene_y)
+                if nearest:
+                    points.append(nearest)
+            
+            for sp in points:
                 if sp.snap_type not in self._active_snaps:
                     continue
                 
                 dist = sp.distance_to(scene_x, scene_y)
-                if dist < best_distance:
+                # Фильтруем по радиусу, как и раньше
+                if dist <= tolerance and dist < best_distance:
                     best_distance = dist
                     best_snap = sp
 
@@ -181,41 +181,75 @@ class SnapManager(QObject):
                 intersections = self.find_intersection(obj1, obj2)
                 for sp in intersections:
                     dist = sp.distance_to(scene_x, scene_y)
-                    if dist < best_distance:
+                    # Intersection тоже требует близости курсора к точке
+                    if dist <= tolerance and dist < best_distance:
                         best_distance = dist
                         best_snap = sp
 
         # 3. Контекстные привязки (Perpendicular, Tangent)
+        # 3. Контекстные привязки (Perpendicular, Tangent)
         if reference_point:
-            can_snap_perp = SnapType.PERPENDICULAR in self._active_snaps
-            can_snap_tan = SnapType.TANGENT in self._active_snaps
+            from .geometry import Point, Circle, Arc, Ellipse
             
-            if can_snap_perp or can_snap_tan:
-                from .geometry import Point
-                # Убедимся что reference_point это Point (вдруг передали tuple)
-                if isinstance(reference_point, (tuple, list)):
-                    ref_pt = (reference_point[0], reference_point[1])
-                else:
-                    ref_pt = (reference_point.x, reference_point.y)
+            if isinstance(reference_point, (tuple, list)):
+                ref_pt = Point(reference_point[0], reference_point[1])
+            else:
+                ref_pt = Point(reference_point.x, reference_point.y)
 
+            # Perpendicular
+            if SnapType.PERPENDICULAR in self._active_snaps:
                 for obj in nearby_objects:
-                    # Perpendicular
-                    if can_snap_perp:
-                        perp_pt = self.find_perpendicular(ref_pt, obj)
-                        if perp_pt:
-                            dist = perp_pt.distance_to(scene_x, scene_y)
-                            if dist < best_distance:
-                                best_distance = dist
-                                best_snap = perp_pt
+                    perp_pt = self.find_perpendicular((ref_pt.x, ref_pt.y), obj)
+                    if perp_pt:
+                        dist = perp_pt.distance_to(scene_x, scene_y)
+                        if dist <= tolerance and dist < best_distance:
+                            best_distance = dist
+                            best_snap = perp_pt
                     
-                    # Tangent
-                    if can_snap_tan:
-                        tan_pts = self.find_tangent(ref_pt, obj)
-                        for tan_pt in tan_pts:
-                            dist = tan_pt.distance_to(scene_x, scene_y)
-                            if dist < best_distance:
-                                best_distance = dist
-                                best_snap = tan_pt
+            # Tangent
+            if SnapType.TANGENT in self._active_snaps:
+                # Ищем по ВСЕМ
+                tan_candidates = [o for o in objects if isinstance(o, (Circle, Arc, Ellipse)) and o is not exclude_object]
+                
+                for obj in tan_candidates:
+                    tan_pts = self.find_tangent((ref_pt.x, ref_pt.y), obj)
+                    
+                    for tan_pt in tan_pts:
+                        vm_x = scene_x - ref_pt.x
+                        vm_y = scene_y - ref_pt.y
+                        len_m_sq = vm_x*vm_x + vm_y*vm_y
+                        
+                        if len_m_sq < (tolerance**2): continue
+                            
+                        vt_x = tan_pt.x - ref_pt.x
+                        vt_y = tan_pt.y - ref_pt.y
+                        len_t_sq = vt_x*vt_x + vt_y*vt_y
+                        
+                        angle_mouse = math.degrees(math.atan2(vm_y, vm_x))
+                        angle_tan = math.degrees(math.atan2(vt_y, vt_x))
+                        
+                        diff = abs(angle_mouse - angle_tan)
+                        while diff > 180: diff = 360 - diff
+                        
+                        # Расширим угол захвата до 10 градусов для удобства
+                        if diff < 10.0:
+                            if len_t_sq < 1e-9: continue
+                            dot_prod = vm_x * vt_x + vm_y * vt_y
+                            t = dot_prod / len_t_sq
+                            
+                            if t < 0.1: continue
+                            
+                            proj_x = ref_pt.x + t * vt_x
+                            proj_y = ref_pt.y + t * vt_y
+                            
+                            # BOOST PRIORITY:
+                            # Считаем 1 градус отклонения эквивалентным 0.1 единицам расстояния (пикселям).
+                            # Это делает касательную "сильнее" обычных привязок.
+                            weighted_diff = diff * 0.1
+                            
+                            if weighted_diff < best_distance:
+                                best_distance = weighted_diff
+                                best_snap = SnapPoint(proj_x, proj_y, SnapType.TANGENT, obj)
         
         return best_snap
     
@@ -322,7 +356,7 @@ class SnapManager(QObject):
     def find_tangent(self, from_point: tuple,
                      to_object: GeometricPrimitive) -> List[SnapPoint]:
         """Находит точки касания."""
-        from .geometry import Circle, Arc
+        from .geometry import Circle, Arc, Ellipse
         
         fx, fy = from_point
         snaps = []
@@ -331,16 +365,21 @@ class SnapManager(QObject):
             center = to_object.center
             radius = to_object.radius
             
-            dx = center.x - fx
-            dy = center.y - fy
-            dist = math.sqrt(dx*dx + dy*dy)
+            # ИСПРАВЛЕНИЕ: Вектор от Центра к Курсору
+            dx = fx - center.x
+            dy = fy - center.y
+            
+            dist_sq = dx*dx + dy*dy
+            dist = math.sqrt(dist_sq)
             
             if dist >= radius:
-                angle_to_center = math.atan2(dy, dx)
+                # Угол от центра к курсору
+                angle_from_center = math.atan2(dy, dx)
+                
                 try:
                     alpha = math.acos(radius / dist)
                     
-                    angles = [angle_to_center + alpha, angle_to_center - alpha]
+                    angles = [angle_from_center + alpha, angle_from_center - alpha]
                     
                     for ang in angles:
                         tx = center.x + radius * math.cos(ang)
@@ -348,6 +387,10 @@ class SnapManager(QObject):
                         
                         if isinstance(to_object, Arc):
                             deg = math.degrees(ang)
+                            # Нормализация для проверки
+                            while deg < 0: deg += 360
+                            while deg >= 360: deg -= 360
+                            
                             if not to_object._angle_is_on_arc(deg):
                                 continue
                                 
@@ -355,7 +398,45 @@ class SnapManager(QObject):
                     
                 except ValueError:
                     pass
-             
+                    
+        elif isinstance(to_object, Ellipse):
+             # ... (код эллипса остается без изменений)
+            # Аналитическое решение для эллипса
+            # A*cos(t) + B*sin(t) = C
+            h, k = to_object.center.x, to_object.center.y
+            a, b = to_object.radius_x, to_object.radius_y
+            
+            # Смещаем точку в систему координат эллипса
+            px = fx - h
+            py = fy - k
+            
+            # Коэффициенты
+            A = b * px
+            B = a * py
+            C = a * b
+            
+            norm = math.sqrt(A*A + B*B)
+            if norm == 0: return snaps # Точка в центре, касательных нет
+            
+            if abs(C) > norm:
+                return snaps # Точка внутри эллипса
+                
+            phi = math.atan2(A, B)
+            val = C / norm
+
+            try:
+                 alpha1 = math.asin(val)
+                 alpha2 = math.pi - alpha1
+                 
+                 ts = [alpha1 - phi, alpha2 - phi]
+                 
+                 for t in ts:
+                     tx = h + a * math.cos(t)
+                     ty = k + b * math.sin(t)
+                     snaps.append(SnapPoint(tx, ty, SnapType.TANGENT, to_object))
+            except ValueError:
+                pass
+
         return snaps
     
     # ==================== Внутренняя логика пересечений ====================
