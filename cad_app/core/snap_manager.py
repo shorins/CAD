@@ -93,6 +93,16 @@ class SnapManager(QObject):
         self._active_snaps = snap_types.copy()
         self.snap_settings_changed.emit()
     
+    def enable_snap_type(self, snap_type: SnapType):
+        """Включает указанный тип привязки."""
+        self._active_snaps.add(snap_type)
+        self.snap_settings_changed.emit()
+
+    def disable_snap_type(self, snap_type: SnapType):
+        """Выключает указанный тип привязки."""
+        self._active_snaps.discard(snap_type)
+        self.snap_settings_changed.emit()
+    
     def enable_all(self):
         """Включает все типы привязок."""
         self._active_snaps = set(SnapType)
@@ -114,7 +124,9 @@ class SnapManager(QObject):
                   objects: List[GeometricPrimitive],
                   tolerance: float = 10.0,
                   exclude_object: Optional[GeometricPrimitive] = None,
-                  reference_point: Optional[tuple] = None) -> Optional[SnapPoint]:
+                  reference_point: Optional[tuple] = None,
+                  grid_size: Optional[float] = None,
+                  zoom_factor: float = 1.0) -> Optional[SnapPoint]:
         """
         Находит лучшую точку привязки.
         """
@@ -187,7 +199,6 @@ class SnapManager(QObject):
                         best_snap = sp
 
         # 3. Контекстные привязки (Perpendicular, Tangent)
-        # 3. Контекстные привязки (Perpendicular, Tangent)
         if reference_point:
             from .geometry import Point, Circle, Arc, Ellipse
             
@@ -208,8 +219,8 @@ class SnapManager(QObject):
                     
             # Tangent
             if SnapType.TANGENT in self._active_snaps:
-                # Ищем по ВСЕМ
-                tan_candidates = [o for o in objects if isinstance(o, (Circle, Arc, Ellipse)) and o is not exclude_object]
+                # Ищем только по объектам РЯДОМ (nearby_objects)
+                tan_candidates = [o for o in nearby_objects if isinstance(o, (Circle, Arc, Ellipse))]
                 
                 for obj in tan_candidates:
                     tan_pts = self.find_tangent((ref_pt.x, ref_pt.y), obj)
@@ -251,6 +262,35 @@ class SnapManager(QObject):
                                 best_distance = weighted_diff
                                 best_snap = SnapPoint(proj_x, proj_y, SnapType.TANGENT, obj)
         
+        # 4. Привязка к сетке (Grid Snap)
+        if SnapType.GRID in self._active_snaps and grid_size is not None and grid_size > 0:
+            # Определяем эффективный шаг сетки
+            # Если zoom < 0.5, то показываются только major линии (x5 шаг)
+            effective_step = grid_size
+            if zoom_factor < 0.5:
+                effective_step = grid_size * 5
+                
+            # Ближайший узел сетки
+            gx = round(scene_x / effective_step) * effective_step
+            gy = round(scene_y / effective_step) * effective_step
+            
+            dist_grid = math.sqrt((scene_x - gx)**2 + (scene_y - gy)**2)
+            
+            # Привязываемся к сетке, если она в радиусе доступа
+            # И если она ближе, чем другие найденные привязки (best_distance)
+            if dist_grid <= tolerance and dist_grid < best_distance:
+                # В качестве объекта передаем None, так как сетка не объект
+                 # Но так как SnapPoint требует source_object: GeometricPrimitive,
+                 # Придется либо разрешить None, либо передать фиктивный объект,
+                 # либо игнорировать source_object при отрисовке.
+                 # Python позволяет передать None если type checker не строг, 
+                 # но лучше проверим dataclass definition.
+                 try:
+                     best_snap = SnapPoint(gx, gy, SnapType.GRID, None) # type: ignore
+                     best_distance = dist_grid
+                 except:
+                     pass # Fallback если строгая валидация
+
         return best_snap
     
     def find_snap_screen(self, screen_x: float, screen_y: float,

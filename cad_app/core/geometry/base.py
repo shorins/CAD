@@ -24,6 +24,7 @@ class SnapType(Enum):
     QUADRANT = auto()       # Квадрант (точки на окружности в 0°, 90°, 180°, 270°)
     NODE = auto()           # Узел (контрольные точки сплайна)
     NEAREST = auto()        # Ближайшая точка на объекте
+    GRID = auto()           # Привязка к сетке
 
 
 @dataclass

@@ -186,11 +186,17 @@ class MainWindow(QMainWindow):
         self.rotate_right_action.setToolTip("Повернуть вид против часовой стрелки (R + Right)")
         self.rotate_right_action.triggered.connect(self._on_rotate_right)
 
-        # Кнопка переключения режима построения линии (θ - полярные координаты)
+        # Переключатель режима построения линии (θ - полярные координаты)
         self.polar_mode_action = QAction(load_svg_icon("public/polar.svg"), "θ", self)
         self.polar_mode_action.setCheckable(True)
         self.polar_mode_action.setToolTip("Полярные координаты (активировано: полярные, неактивировано: декартовы)")
         self.polar_mode_action.toggled.connect(self._on_polar_mode_toggled)
+
+        # Привязка к сетке
+        self.grid_snap_action = QAction(load_svg_icon("public/grid.svg"), "Привязка к сетке", self)
+        self.grid_snap_action.setCheckable(True)
+        self.grid_snap_action.setToolTip("Включить привязку к сетке")
+        self.grid_snap_action.toggled.connect(self._on_grid_snap_toggled)
 
         self.settings_action = QAction(QIcon.fromTheme("preferences-system"), "Настройки...", self)
 
@@ -264,6 +270,10 @@ class MainWindow(QMainWindow):
         # Переключатель режима построения линии
         edit_toolbar.addSeparator()
         edit_toolbar.addAction(self.polar_mode_action)
+        
+        # Переключатель привязки к сетке
+        edit_toolbar.addSeparator()
+        edit_toolbar.addAction(self.grid_snap_action)
 
         # Комбобокс выбора стиля линии
         edit_toolbar.addSeparator()
@@ -284,6 +294,11 @@ class MainWindow(QMainWindow):
         # Уведомляем canvas о изменении режима
         if hasattr(self, 'canvas'):
             self.canvas.on_construction_mode_changed()
+
+    def _on_grid_snap_toggled(self, checked):
+        """Обработчик переключения привязки к сетке."""
+        if hasattr(self, 'canvas'):
+            self.canvas.toggle_grid_snap(checked)
     
     def _deactivate_all_tools(self):
         """Деактивирует все инструменты."""

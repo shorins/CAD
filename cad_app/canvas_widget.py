@@ -2303,34 +2303,46 @@ class CanvasWidget(QWidget):
             scene_pos.x(), scene_pos.y(),
             self.scene.objects,
             tolerance,
-            reference_point=reference_point
+            reference_point=reference_point,
+            grid_size=settings.get("grid_step") or settings.defaults["grid_step"],
+            zoom_factor=self.zoom_factor
         )
         
         # Обновляем только если изменилось
         if snap_point != self.current_snap_point:
             self.current_snap_point = snap_point
-            self.update()
-    
+            self.update()  # Перерисовываем для отображения индикатора
+            
+            # Если есть привязка - отправляем сигнал (можно использовать для статус бара)
+            if snap_point:
+                pass 
+                # print(f"Snapped to {snap_point.snap_type} at {snap_point.x}, {snap_point.y}")
+
+    def toggle_grid_snap(self, enabled: bool):
+        """Включает или выключает привязку к сетке."""
+        if enabled:
+            snap_manager.enable_snap_type(SnapType.GRID)
+        else:
+            snap_manager.disable_snap_type(SnapType.GRID)
+
     def _draw_snap_indicator(self, painter: QPainter):
-        """
-        Отрисовывает индикатор текущей точки привязки.
-        Разные типы привязок отображаются разными символами.
-        """
-        if not self.current_snap_point or not snap_manager.enabled:
-            return
-        
+        """Отрисовывает индикатор текущей точки привязки."""
         sp = self.current_snap_point
-        screen_pos = self.map_from_scene(QPointF(sp.x, sp.y))
-        x, y = int(screen_pos.x()), int(screen_pos.y())
-        size = 8  # Размер индикатора в пикселях
+        if not sp:
+            return
+            
+        x, y = self.map_from_scene(QPointF(sp.x, sp.y)).toTuple()
         
-        # Цвет индикатора - яркий жёлтый/золотой
-        snap_color = QColor("#FFD700")
-        pen = QPen(snap_color, 2)
+        indicator_size = 10
+        size = indicator_size // 2
+        
+        # Цвет индикатора - оранжевый
+        pen = QPen(QColor("#FFA500"), 2)
+        pen.setCosmetic(True)  # Толщина не зависит от масштаба
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         
-        # Рисуем разные символы в зависимости от типа привязки
+        # Рисуем разные символы в зависимости от тиа привязки
         if sp.snap_type == SnapType.ENDPOINT:
             # Квадрат для конечных точек
             painter.drawRect(x - size, y - size, size * 2, size * 2)
@@ -2374,6 +2386,12 @@ class CanvasWidget(QWidget):
             # Касательная (круг с линией)
             painter.drawEllipse(x - size//2, y - size//2, size, size)
             painter.drawLine(x - size, y + size//2, x + size, y + size//2)
+        elif sp.snap_type == SnapType.GRID:
+            # Сетка - решетка (#)
+            painter.drawLine(x - size, y - size/2, x + size, y - size/2)
+            painter.drawLine(x - size, y + size/2, x + size, y + size/2)
+            painter.drawLine(x - size/2, y - size, x - size/2, y + size)
+            painter.drawLine(x + size/2, y - size, x + size/2, y + size)
         else:
             # По умолчанию - круг
             painter.drawEllipse(x - size, y - size, size * 2, size * 2)
