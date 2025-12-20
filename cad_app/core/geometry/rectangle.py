@@ -178,26 +178,27 @@ class Rectangle(GeometricPrimitive):
     def move_control_point(self, index: int, new_x: float, new_y: float) -> bool:
         """
         Перемещает контрольную точку.
-        index=0-3: углы, index=4: центр (перемещает весь прямоугольник)
+        index=0-3: углы, index=4: центр.
+        При перемещении угла противоположный угол остается на месте.
         """
-        if index == 0:
-            # Левый нижний угол
+        if 0 <= index <= 3:
+            # Получаем текущие координаты всех углов
+            # 0: (left, bottom), 1: (right, bottom), 2: (right, top), 3: (left, top)
+            # См. метод corners property
+            current_corners = self.corners
+            
+            # Находим индекс противоположного угла, который должен остаться неподвижным
+            # 0 <-> 2
+            # 1 <-> 3
+            fixed_index = (index + 2) % 4
+            fixed_point = current_corners[fixed_index]
+            
+            # Обновляем точки, определяющие прямоугольник
+            # Теперь он задается новой точкой (которую тянем) и старой фиксированной
             self.p1 = Point(new_x, new_y)
+            self.p2 = fixed_point
             return True
-        elif index == 1:
-            # Правый нижний угол - меняем x у p2 и y у p1
-            self.p2 = Point(new_x, self.p2.y)
-            self.p1 = Point(self.p1.x, new_y)
-            return True
-        elif index == 2:
-            # Правый верхний угол
-            self.p2 = Point(new_x, new_y)
-            return True
-        elif index == 3:
-            # Левый верхний угол - меняем x у p1 и y у p2
-            self.p1 = Point(new_x, self.p1.y)
-            self.p2 = Point(self.p2.x, new_y)
-            return True
+            
         elif index == 4:
             # Центр - перемещаем весь прямоугольник
             current_center = self.center
@@ -206,6 +207,7 @@ class Rectangle(GeometricPrimitive):
             self.p1 = Point(self.p1.x + dx, self.p1.y + dy)
             self.p2 = Point(self.p2.x + dx, self.p2.y + dy)
             return True
+            
         return False
 
     # ==================== Геометрические расчёты ====================
