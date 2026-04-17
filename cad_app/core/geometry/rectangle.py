@@ -116,14 +116,15 @@ class Rectangle(GeometricPrimitive):
     # ==================== Сериализация ====================
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "rectangle",
             "p1": self.p1.to_dict(),
             "p2": self.p2.to_dict(),
-            "style": self.style_name,
             "corner_radius": self.corner_radius,
             "chamfer_size": self.chamfer_size,
         }
+        data.update(self._serialize_common())
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> 'Rectangle':
@@ -132,7 +133,9 @@ class Rectangle(GeometricPrimitive):
         style_name = data.get("style", "Сплошная основная")
         corner_radius = float(data.get("corner_radius", 0))
         chamfer_size = float(data.get("chamfer_size", 0))
-        return Rectangle(p1, p2, style_name, corner_radius, chamfer_size)
+        obj = Rectangle(p1, p2, style_name, corner_radius, chamfer_size)
+        obj._load_common(data)
+        return obj
 
     # ==================== Объектные привязки ====================
     

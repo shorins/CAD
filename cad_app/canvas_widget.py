@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QPointF, Signal, QTimer, QRectF
 
 from .core.scene import Scene
 from .core.geometry import (
-    Point, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
+    Point, PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
     GeometricPrimitive, SnapType
 )
 from .core.snap_manager import snap_manager
@@ -17,6 +17,7 @@ from .settings import settings
 from .icon_utils import load_svg_icon
 from .core.style_manager import style_manager
 from .core.render_utils import create_wavy_path, create_zigzag_path
+from .dxf.mapping import resolve_object_color_hex
 
 class CanvasWidget(QWidget):
     cursor_pos_changed = Signal(QPointF)
@@ -25,7 +26,7 @@ class CanvasWidget(QWidget):
     rotation_changed = Signal(float)  # Сигнал для передачи текущего rotation_angle
     selection_changed = Signal(list) # Сигнал об изменении выделения (передает список выделенных объектов)
 
-    def __init__(self, scene: Scene, tool_actions: dict, parent=None):
+    def __init__(self, scene: Scene, tool_actions: dict | object, parent=None, legacy_parent=None):
         """
         Args:
             scene: Сцена с объектами
@@ -33,22 +34,44 @@ class CanvasWidget(QWidget):
                 'select', 'line', 'circle', 'arc', 'rectangle', 
                 'ellipse', 'polygon', 'spline', 'delete'
         """
+        legacy_mode = not isinstance(tool_actions, dict)
+        legacy_line_action = None
+        legacy_delete_action = None
+        if legacy_mode:
+            legacy_line_action = tool_actions
+            legacy_delete_action = parent
+            parent = legacy_parent
+
         super().__init__(parent)
         self.scene = scene
         self.scene.scene_changed.connect(self.update)
         settings.settings_changed.connect(self.on_settings_changed)
 
+        if legacy_mode:
+            self.tool_actions = {
+                'select': QAction(self),
+                'line': legacy_line_action or QAction(self),
+                'circle': QAction(self),
+                'arc': QAction(self),
+                'rectangle': QAction(self),
+                'ellipse': QAction(self),
+                'polygon': QAction(self),
+                'spline': QAction(self),
+                'delete': legacy_delete_action or QAction(self),
+            }
+        else:
+            self.tool_actions = tool_actions
+
         # Сохраняем все tool actions
-        self.tool_actions = tool_actions
-        self.select_tool_action = tool_actions.get('select')
-        self.line_tool_action = tool_actions.get('line')
-        self.circle_tool_action = tool_actions.get('circle')
-        self.arc_tool_action = tool_actions.get('arc')
-        self.rectangle_tool_action = tool_actions.get('rectangle')
-        self.ellipse_tool_action = tool_actions.get('ellipse')
-        self.polygon_tool_action = tool_actions.get('polygon')
-        self.spline_tool_action = tool_actions.get('spline')
-        self.delete_tool_action = tool_actions.get('delete')
+        self.select_tool_action = self.tool_actions.get('select')
+        self.line_tool_action = self.tool_actions.get('line')
+        self.circle_tool_action = self.tool_actions.get('circle')
+        self.arc_tool_action = self.tool_actions.get('arc')
+        self.rectangle_tool_action = self.tool_actions.get('rectangle')
+        self.ellipse_tool_action = self.tool_actions.get('ellipse')
+        self.polygon_tool_action = self.tool_actions.get('polygon')
+        self.spline_tool_action = self.tool_actions.get('spline')
+        self.delete_tool_action = self.tool_actions.get('delete')
         
         # Сбрасываем выделение при выходе из режима удаления
         self.delete_tool_action.changed.connect(self._on_delete_tool_changed)
@@ -1124,7 +1147,7 @@ class CanvasWidget(QWidget):
         """
         colors = settings.get("colors") or settings.defaults["colors"]
         # Цвет по умолчанию, если вдруг пригодится
-        default_color = QColor(colors.get("line_object", "#FFFFFF"))
+        default_color_hex = colors.get("line_object", "#FFFFFF")
         
         # Получаем базовую толщину S из менеджера стилей
         base_width = style_manager.base_width
@@ -1138,9 +1161,10 @@ class CanvasWidget(QWidget):
             
             # Получаем стиль объекта
             style = style_manager.get_style(obj.style_name)
+            layer = self.scene.layers.get(getattr(obj, "layer_name", "0"))
             
             # Создаем перо
-            pen = QPen(default_color)
+            pen = QPen(QColor(resolve_object_color_hex(obj, layer, default_color_hex)))
             pen_width = base_width * style.width_mult
             pen.setWidthF(pen_width)
             pen.setCosmetic(True)
@@ -1157,7 +1181,9 @@ class CanvasWidget(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             
             # Отрисовка в зависимости от типа примитива
-            if isinstance(obj, Line):
+            if isinstance(obj, PointEntity):
+                self._draw_point_entity(painter, obj, pen)
+            elif isinstance(obj, Line):
                 self._draw_line(painter, obj, pen, pen_width)
             elif isinstance(obj, Circle):
                 self._draw_circle(painter, obj, pen)
@@ -1340,7 +1366,10 @@ class CanvasWidget(QWidget):
         
         for obj in self.selected_objects:
             # Рисуем контур объекта пунктиром
-            if isinstance(obj, Line):
+            if isinstance(obj, PointEntity):
+                pos = self.map_from_scene(QPointF(obj.position.x, obj.position.y))
+                painter.drawRect(QRectF(pos.x() - 4, pos.y() - 4, 8, 8))
+            elif isinstance(obj, Line):
                 start_screen = self.map_from_scene(QPointF(obj.start.x, obj.start.y))
                 end_screen = self.map_from_scene(QPointF(obj.end.x, obj.end.y))
                 painter.drawLine(start_screen, end_screen)
@@ -2421,3 +2450,15 @@ class CanvasWidget(QWidget):
     def _is_shift_pressed(self):
         """Проверяет, зажата ли клавиша Shift."""
         return QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+    def _draw_point_entity(self, painter: QPainter, obj: PointEntity, pen: QPen):
+        """Отрисовывает точку DXF."""
+        screen_pos = self.map_from_scene(QPointF(obj.position.x, obj.position.y))
+        size = 4
+        painter.drawLine(
+            QPointF(screen_pos.x() - size, screen_pos.y()),
+            QPointF(screen_pos.x() + size, screen_pos.y()),
+        )
+        painter.drawLine(
+            QPointF(screen_pos.x(), screen_pos.y() - size),
+            QPointF(screen_pos.x(), screen_pos.y() + size),
+        )

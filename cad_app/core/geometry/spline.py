@@ -23,7 +23,10 @@ class Spline(GeometricPrimitive):
     """
     
     def __init__(self, control_points: List[Point], closed: bool = False,
-                 style_name: str = "Сплошная основная"):
+                 style_name: str = "Сплошная основная", degree: int = 3,
+                 knots: Optional[List[float]] = None,
+                 weights: Optional[List[float]] = None,
+                 fit_points: Optional[List[Point]] = None):
         """
         Args:
             control_points: Список контрольных точек (минимум 2)
@@ -34,6 +37,11 @@ class Spline(GeometricPrimitive):
         self.control_points = control_points if control_points else []
         self.closed = closed
         self._cached_curve_points: Optional[List[Point]] = None
+        self.degree = degree
+        self.knots = list(knots) if knots else []
+        self.weights = list(weights) if weights else []
+        self.fit_points = list(fit_points) if fit_points else []
+        self.is_exact_dxf_spline = bool(self.knots)
 
     # ==================== Управление точками ====================
     
@@ -85,6 +93,12 @@ class Spline(GeometricPrimitive):
         """
         if self._cached_curve_points is not None:
             return self._cached_curve_points
+
+        if self.is_exact_dxf_spline:
+            exact_points = self._get_exact_curve_points(segments_per_section)
+            if exact_points:
+                self._cached_curve_points = exact_points
+                return self._cached_curve_points
         
         if len(self.control_points) < 2:
             self._cached_curve_points = list(self.control_points)
@@ -128,6 +142,39 @@ class Spline(GeometricPrimitive):
         
         self._cached_curve_points = result
         return result
+
+    def _get_exact_curve_points(self, segments_per_section: int = 20) -> List[Point]:
+        """Пытается получить точки точного DXF-сплайна через ezdxf."""
+        try:
+            from ezdxf.math import BSpline, Vec3
+        except ImportError:
+            return []
+
+        points = self.fit_points or self.control_points
+        if len(points) < 2:
+            return list(points)
+
+        try:
+            if self.fit_points and not self.control_points:
+                spline = BSpline.from_fit_points(
+                    [Vec3(p.x, p.y, 0.0) for p in self.fit_points],
+                    degree=self.degree,
+                )
+            else:
+                spline = BSpline(
+                    [Vec3(p.x, p.y, 0.0) for p in self.control_points],
+                    order=max(2, self.degree + 1),
+                    knots=self.knots or None,
+                    weights=self.weights or None,
+                )
+        except Exception:
+            return []
+
+        try:
+            sample_count = max(32, len(points) * max(4, segments_per_section))
+            return [Point(v.x, v.y) for v in spline.approximate(sample_count)]
+        except Exception:
+            return []
     
     def _hermite_interpolate(self, p0: Point, p1: Point, 
                               m0: Point, m1: Point, t: float) -> Point:
@@ -175,19 +222,37 @@ class Spline(GeometricPrimitive):
     # ==================== Сериализация ====================
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "spline",
             "control_points": [p.to_dict() for p in self.control_points],
             "closed": self.closed,
-            "style": self.style_name
+            "degree": self.degree,
+            "knots": list(self.knots),
+            "weights": list(self.weights),
+            "fit_points": [p.to_dict() for p in self.fit_points],
+            "is_exact_dxf_spline": self.is_exact_dxf_spline,
         }
+        data.update(self._serialize_common())
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> 'Spline':
         control_points = [Point.from_dict(p) for p in data["control_points"]]
         closed = data.get("closed", False)
         style_name = data.get("style", "Сплошная основная")
-        return Spline(control_points, closed, style_name)
+        fit_points = [Point.from_dict(p) for p in data.get("fit_points", [])]
+        obj = Spline(
+            control_points,
+            closed,
+            style_name,
+            degree=int(data.get("degree", 3)),
+            knots=list(data.get("knots", [])),
+            weights=list(data.get("weights", [])),
+            fit_points=fit_points,
+        )
+        obj.is_exact_dxf_spline = bool(data.get("is_exact_dxf_spline", obj.is_exact_dxf_spline))
+        obj._load_common(data)
+        return obj
 
     # ==================== Объектные привязки ====================
     

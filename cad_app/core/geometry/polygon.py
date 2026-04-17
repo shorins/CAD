@@ -103,15 +103,16 @@ class Polygon(GeometricPrimitive):
     # ==================== Сериализация ====================
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "polygon",
             "center": self.center.to_dict(),
             "radius": self.radius,
             "num_sides": self.num_sides,
             "polygon_type": self.polygon_type,
             "rotation": self.rotation,
-            "style": self.style_name
         }
+        data.update(self._serialize_common())
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> 'Polygon':
@@ -121,7 +122,9 @@ class Polygon(GeometricPrimitive):
         polygon_type = data.get("polygon_type", PolygonType.INSCRIBED)
         rotation = float(data.get("rotation", 0))
         style_name = data.get("style", "Сплошная основная")
-        return Polygon(center, radius, num_sides, polygon_type, rotation, style_name)
+        obj = Polygon(center, radius, num_sides, polygon_type, rotation, style_name)
+        obj._load_common(data)
+        return obj
 
     # ==================== Объектные привязки ====================
     

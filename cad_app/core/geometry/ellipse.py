@@ -101,13 +101,14 @@ class Ellipse(GeometricPrimitive):
     # ==================== Сериализация ====================
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "ellipse",
             "center": self.center.to_dict(),
             "radius_x": self.radius_x,
             "radius_y": self.radius_y,
-            "style": self.style_name
         }
+        data.update(self._serialize_common())
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> 'Ellipse':
@@ -115,7 +116,9 @@ class Ellipse(GeometricPrimitive):
         radius_x = float(data["radius_x"])
         radius_y = float(data["radius_y"])
         style_name = data.get("style", "Сплошная основная")
-        return Ellipse(center, radius_x, radius_y, style_name)
+        obj = Ellipse(center, radius_x, radius_y, style_name)
+        obj._load_common(data)
+        return obj
 
     # ==================== Объектные привязки ====================
     
