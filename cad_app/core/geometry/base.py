@@ -71,6 +71,46 @@ class GeometricPrimitive(ABC):
     
     def __init__(self, style_name: str = "Сплошная основная"):
         self.style_name = style_name
+        self.layer_name: Optional[str] = None
+        self.aci_color: Optional[int] = None
+        self.true_color: Optional[int] = None
+        self.linetype_name = "BYLAYER"
+        self.lineweight: Optional[int] = None
+        self.source_handle: Optional[str] = None
+        self.source_entity_type: Optional[str] = None
+        self.import_flags: List[str] = []
+
+    def _serialize_common(self) -> dict:
+        """Сериализация общих атрибутов примитива."""
+        return {
+            "style": self.style_name,
+            "dxf": {
+                "layer_name": self.layer_name,
+                "aci_color": self.aci_color,
+                "true_color": self.true_color,
+                "linetype_name": self.linetype_name,
+                "lineweight": self.lineweight,
+                "source_handle": self.source_handle,
+                "source_entity_type": self.source_entity_type,
+                "import_flags": list(self.import_flags),
+            },
+        }
+
+    def _load_common(self, data: dict):
+        """Восстанавливает общие атрибуты примитива."""
+        self.style_name = data.get("style", self.style_name)
+        dxf_data = data.get("dxf", {})
+        if not isinstance(dxf_data, dict):
+            return
+
+        self.layer_name = dxf_data.get("layer_name", self.layer_name or "0") or "0"
+        self.aci_color = dxf_data.get("aci_color")
+        self.true_color = dxf_data.get("true_color")
+        self.linetype_name = dxf_data.get("linetype_name", self.linetype_name or "BYLAYER") or "BYLAYER"
+        self.lineweight = dxf_data.get("lineweight")
+        self.source_handle = dxf_data.get("source_handle")
+        self.source_entity_type = dxf_data.get("source_entity_type")
+        self.import_flags = list(dxf_data.get("import_flags", []))
 
     # ==================== Сериализация ====================
     

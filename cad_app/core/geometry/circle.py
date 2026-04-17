@@ -98,19 +98,22 @@ class Circle(GeometricPrimitive):
     # ==================== Сериализация ====================
     
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "circle",
             "center": self.center.to_dict(),
             "radius": self.radius,
-            "style": self.style_name
         }
+        data.update(self._serialize_common())
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> 'Circle':
         center = Point.from_dict(data["center"])
         radius = float(data["radius"])
         style_name = data.get("style", "Сплошная основная")
-        return Circle(center, radius, style_name)
+        obj = Circle(center, radius, style_name)
+        obj._load_common(data)
+        return obj
 
     # ==================== Объектные привязки ====================
     

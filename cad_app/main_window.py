@@ -4,13 +4,14 @@ import sys
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStatusBar, 
                                QToolBar, QLabel, QFileDialog, QComboBox, QWidget,
-                               QDockWidget)
+                               QDockWidget, QMessageBox)
 from PySide6.QtGui import QAction, QIcon, QActionGroup, QPixmap, QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QSize
 
 from .core.scene import Scene
+from .core.layers import LayerRecord
 from .core.geometry import (
-    Point, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
+    Point, PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
     GeometricPrimitive
 )
 from .core.style_manager import style_manager
@@ -27,6 +28,8 @@ from .polygon_input_panel import PolygonInputPanel
 from .spline_input_panel import SplineInputPanel
 from .edit_panel import EditPanel
 from .icon_utils import load_svg_icon
+from .layer_manager_dialog import LayerManagerDialog
+from .dxf import export_dxf_file, import_dxf_file
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -39,6 +42,7 @@ class MainWindow(QMainWindow):
         self.scene = Scene()
 
         self.style_combo = None
+        self.layer_combo = None
 
         self._create_actions()
         
@@ -103,6 +107,7 @@ class MainWindow(QMainWindow):
         # Связываем выделение с комбобоксом стилей и панелью редактирования
         self.canvas.selection_changed.connect(self._update_style_combo_by_selection)
         self.canvas.selection_changed.connect(self._update_edit_panel)
+        self.canvas.selection_changed.connect(self._update_layer_combo_by_selection)
         # Обновляем список стилей при изменении менеджера
         style_manager.style_changed.connect(self._reload_styles_into_combo)
 
@@ -114,6 +119,8 @@ class MainWindow(QMainWindow):
         self.new_action = QAction(QIcon.fromTheme("document-new"), "&Новый", self)
         self.open_action = QAction(QIcon.fromTheme("document-open"), "&Открыть...", self)
         self.save_action = QAction(QIcon.fromTheme("document-save"), "&Сохранить", self)
+        self.import_dxf_action = QAction("Импорт DXF...", self)
+        self.export_dxf_action = QAction("Экспорт DXF...", self)
         self.exit_action = QAction(QIcon.fromTheme("application-exit"), "&Выход", self)
 
         # Инструмент выделения (Стрелка)
@@ -201,6 +208,8 @@ class MainWindow(QMainWindow):
         self.settings_action = QAction(QIcon.fromTheme("preferences-system"), "Настройки...", self)
 
         self.save_action.triggered.connect(self.save_project)
+        self.import_dxf_action.triggered.connect(self.import_dxf)
+        self.export_dxf_action.triggered.connect(self.export_dxf)
         self.open_action.triggered.connect(self.open_project)
         self.new_action.triggered.connect(self.new_project)
         self.exit_action.triggered.connect(self.close)
@@ -209,6 +218,8 @@ class MainWindow(QMainWindow):
 
         self.style_manager_action = QAction("Менеджер стилей...", self)
         self.style_manager_action.triggered.connect(self.open_style_manager)
+        self.layer_manager_action = QAction("Менеджер слоев...", self)
+        self.layer_manager_action.triggered.connect(self.open_layer_manager)
 
     def _create_menus(self):
         file_menu = self.menuBar().addMenu("&Файл")
@@ -216,7 +227,11 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.save_action)
         file_menu.addSeparator()
+        file_menu.addAction(self.import_dxf_action)
+        file_menu.addAction(self.export_dxf_action)
+        file_menu.addSeparator()
         file_menu.addAction(self.style_manager_action)
+        file_menu.addAction(self.layer_manager_action)
         file_menu.addAction(self.settings_action)
         file_menu.addAction(self.exit_action)
         self.exit_action.triggered.connect(self.close)
@@ -279,6 +294,10 @@ class MainWindow(QMainWindow):
         edit_toolbar.addSeparator()
         style_combo_widget = self._create_style_combo()
         edit_toolbar.addWidget(style_combo_widget)
+
+        edit_toolbar.addSeparator()
+        layer_combo_widget = self._create_layer_combo()
+        edit_toolbar.addWidget(layer_combo_widget)
         
         # Загружаем текущий режим из настроек
         current_mode = settings.get("line_construction_mode") or "cartesian"
@@ -585,6 +604,33 @@ class MainWindow(QMainWindow):
         self.style_combo.activated.connect(self._on_style_combo_activated)
         return self.style_combo
 
+    def _create_layer_combo(self) -> QWidget:
+        """Создает выпадающий список слоев."""
+        self.layer_combo = QComboBox()
+        self.layer_combo.setMinimumWidth(180)
+        self._reload_layers_into_combo()
+        self.layer_combo.activated.connect(self._on_layer_combo_activated)
+        return self.layer_combo
+
+    def _reload_layers_into_combo(self, preferred_layer_name: str | None = None):
+        if not self.layer_combo:
+            return
+
+        current_data = self.layer_combo.currentData()
+        self.layer_combo.blockSignals(True)
+        self.layer_combo.clear()
+
+        for name in self.scene.layers:
+            self.layer_combo.addItem(name, name)
+
+        target_name = preferred_layer_name or self.scene.current_layer_name or current_data
+        index = self.layer_combo.findData(target_name)
+        if index < 0:
+            index = self.layer_combo.findData(current_data or self.scene.current_layer_name)
+        if index >= 0:
+            self.layer_combo.setCurrentIndex(index)
+        self.layer_combo.blockSignals(False)
+
     def _reload_styles_into_combo(self):
         """Перезаполняет комбобокс из style_manager, сохраняя выбор."""
         if not self.style_combo:
@@ -640,6 +686,12 @@ class MainWindow(QMainWindow):
             return
         self._apply_style_selection(style_name)
 
+    def _on_layer_combo_activated(self, index):
+        layer_name = self.layer_combo.itemData(index)
+        if not layer_name or layer_name == "__MIXED__":
+            return
+        self._apply_layer_selection(layer_name)
+
     def _apply_style_selection(self, style_name: str):
         """
         Применяет выбранный стиль: к выделенным объектам или глобально.
@@ -691,6 +743,50 @@ class MainWindow(QMainWindow):
                 self.style_combo.setCurrentIndex(mixed_index)
 
         self.style_combo.blockSignals(False)
+
+    def _apply_layer_selection(self, layer_name: str):
+        """Применяет слой к выделению или меняет текущий активный слой."""
+        selected = self.canvas.selected_objects
+        self.scene.ensure_layer(layer_name)
+
+        if selected:
+            for obj in selected:
+                obj.layer_name = layer_name
+            self.scene.scene_changed.emit()
+            self._update_layer_combo_by_selection(selected)
+        else:
+            self.scene.set_current_layer(layer_name)
+            index = self.layer_combo.findData(layer_name)
+            if index >= 0:
+                self.layer_combo.setCurrentIndex(index)
+
+    def _update_layer_combo_by_selection(self, selected_objects):
+        """Синхронизирует комбобокс слоев с выделением."""
+        if not self.layer_combo:
+            return
+
+        self.layer_combo.blockSignals(True)
+        self._reload_layers_into_combo()
+
+        if not selected_objects:
+            index = self.layer_combo.findData(self.scene.current_layer_name)
+            if index >= 0:
+                self.layer_combo.setCurrentIndex(index)
+        else:
+            first_layer = getattr(selected_objects[0], "layer_name", "0")
+            all_same = all(getattr(obj, "layer_name", "0") == first_layer for obj in selected_objects)
+            if all_same:
+                index = self.layer_combo.findData(first_layer)
+                if index >= 0:
+                    self.layer_combo.setCurrentIndex(index)
+            else:
+                mixed_index = self.layer_combo.findData("__MIXED__")
+                if mixed_index < 0:
+                    self.layer_combo.insertItem(0, "Разные слои", "__MIXED__")
+                    mixed_index = 0
+                self.layer_combo.setCurrentIndex(mixed_index)
+
+        self.layer_combo.blockSignals(False)
 
     def _setup_adaptive_line_width(self):
         screen = QApplication.primaryScreen()
@@ -754,6 +850,7 @@ class MainWindow(QMainWindow):
         """Очищает сцену и сбрасывает настройки для создания нового проекта."""
         self.scene.clear()
         settings.reset_to_defaults()
+        self._reload_layers_into_combo()
 
     def save_project(self):
         """Сохраняет текущую сцену в JSON файл."""
@@ -773,6 +870,11 @@ class MainWindow(QMainWindow):
                 "settings": settings.settings,
                 "style_manager": style_manager.to_dict(),
                 "view_state": self.canvas.get_view_state(),
+                "scene": {
+                    "layers": [layer.to_dict() for layer in self.scene.layers.values()],
+                    "current_layer_name": self.scene.current_layer_name,
+                    "document_meta": self.scene.document_meta,
+                },
                 "objects": [obj.to_dict() for obj in self.scene.objects]
             }
 
@@ -782,8 +884,7 @@ class MainWindow(QMainWindow):
                     # Используем json.dump для красивой записи с отступами
                     json.dump(project_data, f, ensure_ascii=False, indent=4)
             except Exception as e:
-                # TODO: Показать пользователю красивое окно с ошибкой
-                print(f"Ошибка сохранения файла: {e}")
+                QMessageBox.critical(self, "Ошибка сохранения", f"Ошибка сохранения файла: {e}")
 
     def open_project(self):
         """Загружает сцену из JSON файла."""
@@ -820,9 +921,19 @@ class MainWindow(QMainWindow):
                 if "view_state" in project_data:
                     self.canvas.set_view_state(project_data["view_state"])
 
+                scene_data = project_data.get("scene", {})
+                if "layers" in scene_data:
+                    layers = {layer_data["name"]: LayerRecord.from_dict(layer_data) for layer_data in scene_data["layers"]}
+                    self.scene.set_layers(layers)
+                if "current_layer_name" in scene_data:
+                    self.scene.set_current_layer(scene_data["current_layer_name"])
+                if "document_meta" in scene_data:
+                    self.scene.document_meta = dict(scene_data["document_meta"])
+
                 # Воссоздаем объекты из файла
                 # Для всех примитивов используем соответствующие from_dict методы
                 PRIMITIVE_TYPES = {
+                    "point": PointEntity,
                     "line": Line,
                     "circle": Circle,
                     "arc": Arc,
@@ -840,14 +951,104 @@ class MainWindow(QMainWindow):
                         obj = primitive_class.from_dict(obj_data)
                         new_objects.append(obj)
                     else:
-                        print(f"Неизвестный тип объекта: {obj_type}")
+                        self.statusBar().showMessage(f"Неизвестный тип объекта: {obj_type}", 5000)
                 
                 # Добавляем все объекты в сцену
                 for obj in new_objects:
                     self.scene.add_object(obj)
+                self._reload_layers_into_combo()
 
             except Exception as e:
-                print(f"Ошибка открытия файла: {e}")
+                QMessageBox.critical(self, "Ошибка открытия", f"Ошибка открытия файла: {e}")
+
+    def import_dxf(self):
+        """Импортирует DXF-файл в текущую сцену."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Импорт DXF",
+            "",
+            "DXF Files (*.dxf);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            result = import_dxf_file(file_path)
+            self.scene.clear()
+            self.scene.set_layers(result["layers"])
+            self.scene.document_meta = dict(result["document_meta"])
+            self.scene.last_import_report = dict(result["report"])
+            self.scene.set_current_layer(result.get("current_layer_name", "0"))
+            for obj in result["objects"]:
+                self.scene.add_object(obj)
+            self._reload_layers_into_combo()
+            self._show_import_report(result["report"])
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка импорта DXF", str(exc))
+
+    def export_dxf(self):
+        """Экспортирует сцену в DXF-файл."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт DXF",
+            "",
+            "DXF Files (*.dxf);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            report = export_dxf_file(self.scene, file_path)
+            self._show_export_report(report)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка экспорта DXF", str(exc))
+
+    def _show_import_report(self, report: dict):
+        """Показывает сводный отчет импорта DXF."""
+        summary_lines = [
+            f"Импортировано объектов: {report.get('imported_count', 0)}",
+            f"Пропущено сущностей: {report.get('skipped_count', 0)}",
+            f"Слоев: {report.get('layer_count', 0)}",
+        ]
+        if report.get("paperspace_skipped_count"):
+            summary_lines.append(f"Пропущено из paperspace: {report['paperspace_skipped_count']}")
+        if report.get("recovered"):
+            summary_lines.append("Файл был открыт через recover.")
+
+        details_lines = []
+        for reason, count in sorted(report.get("skipped_summary", {}).items()):
+            details_lines.append(f"{count} x {reason}")
+        for warning in report.get("warnings", []):
+            details_lines.append(f"WARNING: {warning}")
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Импорт DXF завершен")
+        box.setText("\n".join(summary_lines))
+        if details_lines:
+            box.setDetailedText("\n".join(details_lines))
+        box.exec()
+
+    def _show_export_report(self, report: dict):
+        """Показывает отчет экспорта DXF."""
+        summary_lines = [
+            f"Версия DXF: {report.get('version', 'R2010')}",
+            f"Записано сущностей: {report.get('written_entities', 0)}",
+            f"Разложено объектов: {report.get('decomposed_objects', 0)}",
+        ]
+        details = []
+        for layer_name in report.get("created_layers", []):
+            details.append(f"Создан слой: {layer_name}")
+        for warning in report.get("warnings", []):
+            details.append(f"WARNING: {warning}")
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Экспорт DXF завершен")
+        box.setText("\n".join(summary_lines))
+        if details:
+            box.setDetailedText("\n".join(details))
+        box.exec()
 
     def open_settings(self):
         dialog = SettingsDialog(self)
@@ -857,6 +1058,11 @@ class MainWindow(QMainWindow):
         from .style_editor_dialog import StyleEditorDialog
         dialog = StyleEditorDialog(self)
         dialog.exec()
+
+    def open_layer_manager(self):
+        dialog = LayerManagerDialog(self.scene, self)
+        if dialog.exec():
+            self._reload_layers_into_combo()
 
 def run():
     app = QApplication(sys.argv)

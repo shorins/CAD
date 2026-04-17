@@ -234,14 +234,15 @@ class Arc(GeometricPrimitive):
     # ==================== Сериализация ====================
     
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "arc",
             "center": self.center.to_dict(),
             "radius": self.radius,
             "start_angle": self.start_angle,
             "span_angle": self.span_angle,
-            "style": self.style_name
         }
+        data.update(self._serialize_common())
+        return data
     
     @staticmethod
     def from_dict(data: dict) -> 'Arc':
@@ -250,7 +251,9 @@ class Arc(GeometricPrimitive):
         start_angle = float(data["start_angle"])
         span_angle = float(data["span_angle"])
         style_name = data.get("style", "Сплошная основная")
-        return Arc(center, radius, start_angle, span_angle, style_name)
+        obj = Arc(center, radius, start_angle, span_angle, style_name)
+        obj._load_common(data)
+        return obj
     
     # ==================== Объектные привязки ====================
     

@@ -50,19 +50,22 @@ class Line(GeometricPrimitive):
     # ==================== Сериализация ====================
     
     def to_dict(self) -> dict:
-        return {
+        data = {
             "type": "line",
             "start": self.start.to_dict(),
             "end": self.end.to_dict(),
-            "style": self.style_name
         }
+        data.update(self._serialize_common())
+        return data
 
     @staticmethod
     def from_dict(data: dict) -> 'Line':
         start = Point.from_dict(data["start"])
         end = Point.from_dict(data["end"])
         style_name = data.get("style", "Сплошная основная")
-        return Line(start, end, style_name)
+        obj = Line(start, end, style_name)
+        obj._load_common(data)
+        return obj
 
     # ==================== Объектные привязки ====================
     

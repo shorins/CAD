@@ -14,6 +14,7 @@ from .base import (
 
 # Вспомогательные классы
 from .point import Point
+from .point_entity import PointEntity
 
 # Геометрические примитивы
 from .line import Line
@@ -25,7 +26,7 @@ from .polygon import Polygon, PolygonType
 from .spline import Spline
 
 # Для удобства импорта всех примитивов одним списком
-ALL_PRIMITIVES = [Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline]
+ALL_PRIMITIVES = [PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline]
 
 __all__ = [
     # Базовые
@@ -35,6 +36,7 @@ __all__ = [
     'ControlPoint',
     # Вспомогательные
     'Point',
+    'PointEntity',
     # Примитивы
     'Line',
     'Circle',
