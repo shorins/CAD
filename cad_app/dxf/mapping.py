@@ -14,22 +14,27 @@ MIXED_VALUE = "__MIXED__"
 
 DXF_LINETYPE_TO_STYLE = {
     "CONTINUOUS": "Сплошная основная",
+    "THIN": "Сплошная тонкая",
     "BYLAYER": "Сплошная основная",
     "BYBLOCK": "Сплошная основная",
     "DASHED": "Штриховая",
+    "HIDDEN": "Штриховая",
     "CENTER": "Штрихпунктирная тонкая",
     "CENTER2": "Штрихпунктирная тонкая",
     "CENTERX2": "Штрихпунктирная тонкая",
     "PHANTOM": "Штрихпунктирная с двумя точками",
     "PHANTOM2": "Штрихпунктирная с двумя точками",
+    "BATTING": "Сплошная волнистая",
+    "WAVES": "Сплошная волнистая",
+    "ZIGZAG": "Сплошная с изломами",
 }
 
 STYLE_TO_DXF_LINETYPE = {
     "Сплошная основная": "CONTINUOUS",
     "Сплошная тонкая": "CONTINUOUS",
     "Сплошная волнистая": "CONTINUOUS",
-    "Сплошная с изломами": "CONTINUOUS",
-    "Штриховая": "DASHED",
+    "Сплошная с изломами": "ZIGZAG",
+    "Штриховая": "HIDDEN",
     "Штрихпунктирная тонкая": "CENTER",
     "Штрихпунктирная утолщенная": "CENTER",
     "Штрихпунктирная с двумя точками": "PHANTOM",
@@ -41,7 +46,8 @@ def map_linetype_to_style(linetype_name: str | None, fallback_style: str = "Сп
     """Сопоставляет DXF linetype внутреннему стилю."""
     if not linetype_name:
         return fallback_style
-    return DXF_LINETYPE_TO_STYLE.get(linetype_name.upper(), fallback_style)
+    normalized = _normalize_linetype_name(linetype_name)
+    return DXF_LINETYPE_TO_STYLE.get(normalized, fallback_style)
 
 
 def map_style_to_linetype(style_name: str | None) -> str:
@@ -62,7 +68,7 @@ def display_style_for_layer(layer: LayerRecord | None) -> str:
 
 def effective_linetype_name(entity_linetype: str | None, layer: LayerRecord | None) -> str:
     """Возвращает эффективный linetype с учетом BYLAYER/BYBLOCK."""
-    name = (entity_linetype or "BYLAYER").upper()
+    name = _normalize_linetype_name(entity_linetype or "BYLAYER")
     if name == "BYLAYER":
         return layer.linetype_name if layer else "CONTINUOUS"
     if name == "BYBLOCK":
@@ -185,3 +191,23 @@ def _normalize_aci(value) -> int | None:
     except (TypeError, ValueError):
         return None
     return None if color in {0, 256, 257} else color
+
+
+def _normalize_linetype_name(name: str | None) -> str:
+    """Нормализует имя типа линии, сохраняя совместимость с DXF-суффиксами."""
+    if not name:
+        return "CONTINUOUS"
+
+    normalized = str(name).strip().upper()
+    if normalized in DXF_LINETYPE_TO_STYLE:
+        return normalized
+
+    base = normalized.split("_", 1)[0]
+    if base in DXF_LINETYPE_TO_STYLE:
+        return base
+
+    for prefix in ("CENTER", "HIDDEN", "PHANTOM", "DASHED", "BATTING", "WAVES", "ZIGZAG"):
+        if normalized.startswith(prefix):
+            return prefix
+
+    return normalized

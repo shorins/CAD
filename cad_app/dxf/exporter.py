@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 from pathlib import Path
 
 from ..core.geometry import Arc, Circle, Ellipse, Line, PointEntity, Polygon, Rectangle, Spline
@@ -25,6 +26,7 @@ def export_dxf_file(scene, file_path: str | Path, version: str = DEFAULT_DXF_VER
         "written_entities": 0,
         "decomposed_objects": 0,
         "created_layers": [],
+        "created_linetypes": [],
         "warnings": [],
     }
 
@@ -32,6 +34,7 @@ def export_dxf_file(scene, file_path: str | Path, version: str = DEFAULT_DXF_VER
     if insunits is not None:
         doc.header["$INSUNITS"] = int(insunits)
 
+    _ensure_linetypes(doc, scene, report)
     _ensure_layers(doc, scene, report)
 
     for obj in scene.objects:
@@ -55,6 +58,10 @@ def _export_object(doc, msp, obj, scene, report: dict) -> int:
         return 1
 
     if isinstance(obj, Line):
+        if getattr(obj, "style_name", None) == "Сплошная волнистая":
+            entity = _export_wavy_line_as_spline(msp, obj)
+            apply_common_entity_attributes(entity, _linetype_override(obj, linetype_name="CONTINUOUS"), layer)
+            return 1
         entity = msp.add_line((obj.start.x, obj.start.y, 0.0), (obj.end.x, obj.end.y, 0.0))
         apply_common_entity_attributes(entity, obj, layer)
         return 1
@@ -163,6 +170,41 @@ def _export_spline(msp, obj: Spline):
     return msp.add_spline([(point.x, point.y, 0.0) for point in fit_points], degree=max(2, obj.degree))
 
 
+def _export_wavy_line_as_spline(msp, obj: Line):
+    dx = obj.end.x - obj.start.x
+    dy = obj.end.y - obj.start.y
+    length = math.hypot(dx, dy)
+    if length <= 1e-6:
+        return msp.add_line((obj.start.x, obj.start.y, 0.0), (obj.end.x, obj.end.y, 0.0))
+
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux
+
+    # Экспортируем волнистую линию как одну геометрическую кривую, а не как custom linetype.
+    periods = max(3, min(12, int(round(length / 25.0)) or 1))
+    amplitude = max(length * 0.03, 0.75)
+    sample_count = max(25, periods * 16)
+    step = length / sample_count
+    fit_points = []
+
+    for index in range(sample_count + 1):
+        t = step * index
+        if index == sample_count:
+            t = length
+        offset = amplitude * math.sin(2.0 * math.pi * periods * (t / length))
+        px = obj.start.x + ux * t + nx * offset
+        py = obj.start.y + uy * t + ny * offset
+        fit_points.append((px, py, 0.0))
+
+    return msp.add_spline(fit_points, degree=3)
+
+
+def _linetype_override(obj, linetype_name: str):
+    proxy = SimpleNamespace(**obj.__dict__)
+    proxy.linetype_name = linetype_name
+    return proxy
+
+
 def _ensure_layers(doc, scene, report):
     if not scene.layers:
         scene.ensure_layer("0")
@@ -181,6 +223,44 @@ def _ensure_layers(doc, scene, report):
         if layer.lineweight is not None:
             table_layer.dxf.lineweight = int(layer.lineweight)
         table_layer.dxf.flags = int(layer.flags)
+
+
+def _ensure_linetypes(doc, scene, report):
+    required = set()
+
+    for layer in scene.layers.values():
+        if layer.linetype_name:
+            required.add(layer.linetype_name)
+        elif layer.display_style_name:
+            required.add(map_style_to_linetype(layer.display_style_name))
+
+    for obj in scene.objects:
+        linetype_name = getattr(obj, "linetype_name", None)
+        if linetype_name and linetype_name not in {"BYLAYER", "BYBLOCK"}:
+            required.add(linetype_name)
+        elif getattr(obj, "style_name", None):
+            required.add(map_style_to_linetype(obj.style_name))
+
+    custom_patterns = {
+        # AutoCAD-compatible names used by downstream CAD systems. The exact
+        # AutoCAD definitions are complex shape-based linetypes, so here we keep
+        # the standard names and provide safe simple surrogates for interoperability.
+        "HIDDEN": ([0.6, 0.5, -0.1], "Hidden __ __ __ __"),
+        "ZIGZAG": ([1.2, 0.3, -0.15, 0.3, -0.15, 0.3, -0.15], "Zigzag surrogate"),
+    }
+
+    existing = {linetype.dxf.name.upper() for linetype in doc.linetypes}
+    for name in sorted(required):
+        normalized = str(name).upper()
+        if normalized in {"BYLAYER", "BYBLOCK"} or normalized in existing:
+            continue
+        pattern = custom_patterns.get(normalized)
+        if pattern is None:
+            report["warnings"].append(f"Неизвестный linetype {name} не создан автоматически")
+            continue
+        values, description = pattern
+        doc.linetypes.add(normalized, values, description=description)
+        report["created_linetypes"].append(normalized)
 
 
 def _load_ezdxf():

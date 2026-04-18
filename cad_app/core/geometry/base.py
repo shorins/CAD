@@ -76,8 +76,11 @@ class GeometricPrimitive(ABC):
         self.true_color: Optional[int] = None
         self.linetype_name = "BYLAYER"
         self.lineweight: Optional[int] = None
+        self.imported_from_dxf: bool = False
         self.source_handle: Optional[str] = None
         self.source_entity_type: Optional[str] = None
+        self.source_linetype_name: Optional[str] = None
+        self.promotion_kind: Optional[str] = None
         self.import_flags: List[str] = []
 
     def _serialize_common(self) -> dict:
@@ -90,8 +93,11 @@ class GeometricPrimitive(ABC):
                 "true_color": self.true_color,
                 "linetype_name": self.linetype_name,
                 "lineweight": self.lineweight,
+                "imported_from_dxf": self.imported_from_dxf,
                 "source_handle": self.source_handle,
                 "source_entity_type": self.source_entity_type,
+                "source_linetype_name": self.source_linetype_name,
+                "promotion_kind": self.promotion_kind,
                 "import_flags": list(self.import_flags),
             },
         }
@@ -108,8 +114,11 @@ class GeometricPrimitive(ABC):
         self.true_color = dxf_data.get("true_color")
         self.linetype_name = dxf_data.get("linetype_name", self.linetype_name or "BYLAYER") or "BYLAYER"
         self.lineweight = dxf_data.get("lineweight")
+        self.imported_from_dxf = bool(dxf_data.get("imported_from_dxf", self.imported_from_dxf))
         self.source_handle = dxf_data.get("source_handle")
         self.source_entity_type = dxf_data.get("source_entity_type")
+        self.source_linetype_name = dxf_data.get("source_linetype_name")
+        self.promotion_kind = dxf_data.get("promotion_kind")
         self.import_flags = list(dxf_data.get("import_flags", []))
 
     # ==================== Сериализация ====================
