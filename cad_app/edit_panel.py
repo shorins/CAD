@@ -15,6 +15,7 @@ from .core.geometry import (
     Point, GeometricPrimitive
 )
 from .core.geometry.polygon import PolygonType
+from .dxf.mapping import aci_color_choices, normalize_object_aci
 
 
 class EditPanel(QWidget):
@@ -86,6 +87,9 @@ class EditPanel(QWidget):
         
         obj = selected_objects[0]
         self.current_object = obj
+
+        if isinstance(obj, GeometricPrimitive):
+            self._create_common_properties_editor(obj)
         
         # Создаём редактор в зависимости от типа
         if isinstance(obj, Line):
@@ -171,6 +175,34 @@ class EditPanel(QWidget):
         """Уведомляет об изменении объекта."""
         if not self._blocking_signals:
             self.object_changed.emit()
+
+    def _create_common_properties_editor(self, obj: GeometricPrimitive):
+        """Редактор общих свойств примитива."""
+        group = QGroupBox("Общие свойства")
+        layout = QFormLayout(group)
+
+        self.object_color_combo = QComboBox()
+        for label, aci in aci_color_choices():
+            self.object_color_combo.addItem(label, aci)
+
+        current_aci = normalize_object_aci(getattr(obj, "aci_color", None))
+        current_index = self.object_color_combo.findData(current_aci)
+        if current_index < 0:
+            current_index = self.object_color_combo.findData(None)
+        self.object_color_combo.setCurrentIndex(max(0, current_index))
+        self.object_color_combo.currentIndexChanged.connect(self._on_object_color_changed)
+
+        layout.addRow("Цвет:", self.object_color_combo)
+        self.content_layout.addWidget(group)
+
+    def _on_object_color_changed(self, index: int):
+        if not self.current_object or not isinstance(self.current_object, GeometricPrimitive):
+            return
+
+        selected_aci = self.object_color_combo.itemData(index)
+        self.current_object.aci_color = normalize_object_aci(selected_aci)
+        self.current_object.true_color = None
+        self._emit_change()
     
     # ==================== Редакторы для каждого типа ====================
     

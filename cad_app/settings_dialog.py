@@ -52,7 +52,7 @@ class SettingsDialog(QDialog):
         form_layout.addRow("Фон холста:", self.canvas_bg_picker)
         form_layout.addRow("Сетка (второстепенная):", self.grid_minor_picker)
         form_layout.addRow("Сетка (основная):", self.grid_major_picker)
-        form_layout.addRow("Объект (линия):", self.line_object_picker)
+        form_layout.addRow("Цвет объектов по умолчанию:", self.line_object_picker)
         
         layout.addLayout(form_layout)
 
