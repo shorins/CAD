@@ -28,7 +28,7 @@ def test_dxf_export_import_roundtrip_basic():
     scene.add_object(Line(Point(0, 0), Point(10, 0)))
     scene.add_object(Circle(Point(5, 5), 2))
     scene.add_object(Arc(Point(0, 0), 3, 0, 90))
-    scene.add_object(Ellipse(Point(0, 0), 4, 2))
+    scene.add_object(Ellipse(Point(0, 0), 4, 2, rotation=25))
     scene.add_object(Spline([Point(0, 0), Point(1, 2), Point(2, 0)]))
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -41,6 +41,25 @@ def test_dxf_export_import_roundtrip_basic():
     assert result["report"]["skipped_count"] == 0
     assert {"PointEntity", "Line", "Circle", "Arc", "Ellipse", "Spline"} <= imported_types
     print("✓ test_dxf_export_import_roundtrip_basic passed")
+
+
+def test_dxf_export_import_rotated_ellipse_roundtrip():
+    scene = Scene()
+    ellipse = Ellipse(Point(12, -3), 7, 3, rotation=33.5)
+    scene.add_object(ellipse)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "rotated_ellipse_roundtrip.dxf"
+        export_dxf_file(scene, path)
+        result = import_dxf_file(path)
+
+    imported = next(obj for obj in result["objects"] if isinstance(obj, Ellipse))
+    assert abs(imported.center.x - ellipse.center.x) < 1e-6
+    assert abs(imported.center.y - ellipse.center.y) < 1e-6
+    assert abs(imported.radius_x - ellipse.radius_x) < 1e-6
+    assert abs(imported.radius_y - ellipse.radius_y) < 1e-6
+    assert abs(imported.rotation - ellipse.rotation) < 1e-4
+    print("✓ test_dxf_export_import_rotated_ellipse_roundtrip passed")
 
 
 def test_dxf_export_import_roundtrip_native_shapes():
@@ -193,10 +212,12 @@ def test_dxf_import_real_fixture_promotions():
     polygons = [obj for obj in result["objects"] if isinstance(obj, Polygon)]
     zigzags = [obj for obj in result["objects"] if isinstance(obj, Line) and obj.style_name == "Сплошная с изломами"]
     splines = [obj for obj in result["objects"] if isinstance(obj, Spline)]
+    ellipses = [obj for obj in result["objects"] if isinstance(obj, Ellipse)]
 
     assert rectangles, "Прямоугольник из fixture должен распознаваться"
     assert polygons, "Многоугольник из fixture должен распознаваться"
     assert zigzags, "LINE с linetype=ZIGZAG должен импортироваться как изломанная"
+    assert ellipses, "Повернутый эллипс из fixture должен импортироваться"
     assert result["report"]["promoted_count"] >= 2
 
     if splines:
