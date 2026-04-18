@@ -15,6 +15,8 @@ from cad_app.core.geometry import Arc, Circle, Ellipse, Line, Point, PointEntity
 from cad_app.core.layers import LayerRecord
 from cad_app.core.scene import Scene
 from cad_app.dxf import export_dxf_file, import_dxf_file
+from cad_app.dxf.mapping import nearest_supported_aci_from_rgb, resolve_object_color_hex
+from cad_app.settings import settings
 
 
 def test_dxf_export_import_roundtrip_basic():
@@ -98,7 +100,8 @@ def test_dxf_import_layers_and_overrides():
     assert imported_line.layer_name == "A"
     assert imported_line.style_name == "Штриховая"
     assert imported_line.aci_color is None
-    assert imported_circle.true_color is not None
+    assert imported_circle.true_color is None
+    assert imported_circle.aci_color == 1
     assert imported_circle.linetype_name == "CENTER"
     print("✓ test_dxf_import_layers_and_overrides passed")
 
@@ -145,7 +148,7 @@ def test_json_preserves_dxf_metadata():
     obj = Line(Point(0, 0), Point(1, 1))
     obj.layer_name = "LayerA"
     obj.aci_color = 1
-    obj.true_color = 0x112233
+    obj.true_color = None
     obj.linetype_name = "CENTER"
     obj.lineweight = 25
     obj.imported_from_dxf = True
@@ -170,7 +173,8 @@ def test_json_preserves_dxf_metadata():
 
     assert restored_layer.name == "LayerA"
     assert restored_obj.layer_name == "LayerA"
-    assert restored_obj.true_color == 0x112233
+    assert restored_obj.aci_color == 1
+    assert restored_obj.true_color is None
     assert restored_obj.imported_from_dxf is True
     assert restored_obj.source_handle == "ABCD"
     assert restored_obj.source_linetype_name == "CENTER"
@@ -224,6 +228,83 @@ def test_dxf_export_autocad_linetype_names():
     print("✓ test_dxf_export_autocad_linetype_names passed")
 
 
+def test_color_mapping_and_fallback_resolution():
+    assert nearest_supported_aci_from_rgb((255, 10, 10)) == 1
+    assert nearest_supported_aci_from_rgb((250, 250, 10)) == 2
+    assert nearest_supported_aci_from_rgb((10, 250, 10)) == 3
+
+    settings.set("colors", {
+        "canvas_bg": "#2D2D2D",
+        "grid_minor": "#1EFFFFFF",
+        "grid_major": "#61FFFFFF",
+        "line_object": "#ABCDEF",
+    })
+
+    layer = LayerRecord(name="A", aci_color=3)
+    obj = Line(Point(0, 0), Point(1, 0))
+    assert resolve_object_color_hex(obj, layer, "#000000") == "#00FF00"
+
+    obj.aci_color = 1
+    assert resolve_object_color_hex(obj, layer, "#000000") == "#FF0000"
+
+    obj.aci_color = None
+    layer.aci_color = None
+    assert resolve_object_color_hex(obj, layer, "#ABCDEF") == "#ABCDEF"
+    print("✓ test_color_mapping_and_fallback_resolution passed")
+
+
+def test_dxf_export_import_object_aci_colors():
+    scene = Scene()
+    red = Line(Point(0, 0), Point(10, 0))
+    red.aci_color = 1
+    red.true_color = None
+    cyan = Circle(Point(5, 5), 2)
+    cyan.aci_color = 4
+    cyan.true_color = None
+    scene.add_object(red)
+    scene.add_object(cyan)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "object_colors.dxf"
+        export_dxf_file(scene, path)
+        doc = ezdxf.readfile(path)
+        entities = list(doc.modelspace())
+        result = import_dxf_file(path)
+
+    assert entities[0].dxf.color == 1
+    assert not entities[0].dxf.hasattr("true_color")
+    assert entities[1].dxf.color == 4
+    assert not entities[1].dxf.hasattr("true_color")
+
+    imported_line = next(obj for obj in result["objects"] if isinstance(obj, Line))
+    imported_circle = next(obj for obj in result["objects"] if isinstance(obj, Circle))
+    assert imported_line.aci_color == 1
+    assert imported_circle.aci_color == 4
+    assert imported_line.true_color is None
+    assert imported_circle.true_color is None
+    print("✓ test_dxf_export_import_object_aci_colors passed")
+
+
+def test_dxf_import_normalizes_nonstandard_colors():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "normalize_colors.dxf"
+        doc = ezdxf.new("R2010", setup=True)
+        msp = doc.modelspace()
+        line = msp.add_line((0, 0), (1, 0), dxfattribs={"color": 30})
+        circle = msp.add_circle((2, 2), 1)
+        circle.rgb = (10, 10, 240)
+        doc.saveas(path)
+        result = import_dxf_file(path)
+
+    imported_line = next(obj for obj in result["objects"] if isinstance(obj, Line))
+    imported_circle = next(obj for obj in result["objects"] if isinstance(obj, Circle))
+    assert imported_line.aci_color in {1, 2, 3, 4, 5, 6, 7}
+    assert imported_circle.aci_color == 5
+    assert imported_line.true_color is None
+    assert imported_circle.true_color is None
+    print("✓ test_dxf_import_normalizes_nonstandard_colors passed")
+
+
 if __name__ == "__main__":
     test_dxf_export_import_roundtrip_basic()
     test_dxf_export_import_roundtrip_native_shapes()
@@ -233,4 +314,7 @@ if __name__ == "__main__":
     test_json_preserves_dxf_metadata()
     test_dxf_import_real_fixture_promotions()
     test_dxf_export_autocad_linetype_names()
+    test_color_mapping_and_fallback_resolution()
+    test_dxf_export_import_object_aci_colors()
+    test_dxf_import_normalizes_nonstandard_colors()
     print("\n✅ Все DXF тесты пройдены успешно!")
