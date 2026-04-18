@@ -561,9 +561,16 @@ class EditPanel(QWidget):
         self.ellipse_ry.setDecimals(2)
         self.ellipse_ry.setValue(ellipse.radius_y)
         self.ellipse_ry.valueChanged.connect(self._on_ellipse_ry_changed)
+
+        self.ellipse_rotation = QDoubleSpinBox()
+        self.ellipse_rotation.setRange(-360, 360)
+        self.ellipse_rotation.setDecimals(1)
+        self.ellipse_rotation.setValue(ellipse.rotation)
+        self.ellipse_rotation.valueChanged.connect(self._on_ellipse_rotation_changed)
         
         axes_layout.addRow("Радиус X:", self.ellipse_rx)
         axes_layout.addRow("Радиус Y:", self.ellipse_ry)
+        axes_layout.addRow("Поворот:", self.ellipse_rotation)
         self.content_layout.addWidget(axes_group)
         
         self.content_layout.addStretch()
@@ -586,6 +593,11 @@ class EditPanel(QWidget):
     def _on_ellipse_ry_changed(self, value):
         if self.current_object and isinstance(self.current_object, Ellipse):
             self.current_object.radius_y = value
+            self._emit_change()
+
+    def _on_ellipse_rotation_changed(self, value):
+        if self.current_object and isinstance(self.current_object, Ellipse):
+            self.current_object.rotation = value
             self._emit_change()
     
     def _create_polygon_editor(self, polygon: Polygon):

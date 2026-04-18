@@ -126,6 +126,9 @@ class EllipseInputPanel(QWidget):
         self._add_separator()
         r_group = self._create_input_group("Радиусы:", ["Rx", "Ry"])
         self.input_layout.addWidget(r_group)
+        self._add_separator()
+        angle_group = self._create_input_group("Поворот:", ["Angle"])
+        self.input_layout.addWidget(angle_group)
     
     def _add_separator(self):
         separator = QFrame()
@@ -193,11 +196,14 @@ class EllipseInputPanel(QWidget):
             yc = self._parse_float(self.coord_inputs["Yc"].text())
             rx = self._parse_float(self.coord_inputs["Rx"].text())
             ry = self._parse_float(self.coord_inputs["Ry"].text())
+            angle = self._parse_float(self.coord_inputs["Angle"].text())
             
             if any(v is None for v in [xc, yc, rx, ry]) or rx <= 0 or ry <= 0:
                 return
+            if angle is None:
+                angle = 0.0
             
-            ellipse = Ellipse(Point(xc, yc), rx, ry)
+            ellipse = Ellipse(Point(xc, yc), rx, ry, rotation=angle)
             self.ellipse_requested.emit(ellipse)
             self._clear_inputs()
                 

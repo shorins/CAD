@@ -601,49 +601,37 @@ class SnapManager(QObject):
         return points
 
     def _intersect_line_ellipse(self, line, ellipse):
-        """Пересечение отрезка и эллипса (с осями, параллельными координатным)."""
+        """Пересечение отрезка и эллипса в локальной системе координат эллипса."""
         from .geometry import Point
-        
-        # Параметры эллипса
-        h, k = ellipse.center.x, ellipse.center.y
-        a, b = ellipse.radius_x, ellipse.radius_y
-        
-        # Параметры линии P(t) = P1 + t * (P2 - P1)
-        x1, y1 = line.start.x, line.start.y
-        dx = line.end.x - x1
-        dy = line.end.y - y1
-        
-        # Подставляем x(t), y(t) в уравнение эллипса:
-        # ((x1 + t*dx - h)^2 / a^2) + ((y1 + t*dy - k)^2 / b^2) = 1
-        # Упрощаем: b^2(xp + t*dx)^2 + a^2(yp + t*dy)^2 - a^2*b^2 = 0
-        # где xp = x1 - h, yp = y1 - k
-        
-        xp = x1 - h
-        yp = y1 - k
-        
-        # Коэффициенты квадратного уравнения A*t^2 + B*t + C = 0
-        A = (b * dx)**2 + (a * dy)**2
-        B = 2 * (b**2 * xp * dx + a**2 * yp * dy)
-        C = (b * xp)**2 + (a * yp)**2 - (a * b)**2
-        
-        points = []
-        if A == 0: return points # Линия вырождена в точку или бесконечна (не бывает тут)
 
-        discriminant = B*B - 4*A*C
-        
+        a, b = ellipse.radius_x, ellipse.radius_y
+        points = []
+        if a <= 0 or b <= 0:
+            return points
+
+        x1, y1 = ellipse._local_from_world(line.start)
+        x2, y2 = ellipse._local_from_world(line.end)
+        dx = x2 - x1
+        dy = y2 - y1
+
+        A = (dx * dx) / (a * a) + (dy * dy) / (b * b)
+        B = 2 * ((x1 * dx) / (a * a) + (y1 * dy) / (b * b))
+        C = (x1 * x1) / (a * a) + (y1 * y1) / (b * b) - 1.0
+
+        if math.isclose(A, 0.0, abs_tol=1e-12):
+            return points
+
+        discriminant = B * B - 4 * A * C
         if discriminant < 0:
             return points
-            
+
         sqrt_d = math.sqrt(discriminant)
-        t1 = (-B - sqrt_d) / (2*A)
-        t2 = (-B + sqrt_d) / (2*A)
-        
-        for t in [t1, t2]:
-            if 0 <= t <= 1: # Проверка на принадлежность отрезку
-                x = x1 + t*dx
-                y = y1 + t*dy
-                points.append(Point(x, y))
-                
+        for t in [(-B - sqrt_d) / (2 * A), (-B + sqrt_d) / (2 * A)]:
+            if 0 <= t <= 1:
+                local_x = x1 + t * dx
+                local_y = y1 + t * dy
+                points.append(ellipse._world_from_local(local_x, local_y))
+
         return points
 
     def _intersect_circle_circle(self, c1, c2):

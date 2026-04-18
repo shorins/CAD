@@ -78,8 +78,21 @@ def _export_object(doc, msp, obj, scene, report: dict) -> int:
         return 1
 
     if isinstance(obj, Ellipse):
-        major_axis = (obj.radius_x, 0.0, 0.0)
-        ratio = 0.0 if obj.radius_x == 0 else obj.radius_y / obj.radius_x
+        if obj.radius_x >= obj.radius_y:
+            major_length = obj.radius_x
+            minor_length = obj.radius_y
+            major_angle = math.radians(obj.rotation)
+        else:
+            major_length = obj.radius_y
+            minor_length = obj.radius_x
+            major_angle = math.radians(obj.rotation + 90.0)
+
+        major_axis = (
+            major_length * math.cos(major_angle),
+            major_length * math.sin(major_angle),
+            0.0,
+        )
+        ratio = 0.0 if major_length == 0 else minor_length / major_length
         entity = msp.add_ellipse((obj.center.x, obj.center.y, 0.0), major_axis=major_axis, ratio=ratio)
         apply_common_entity_attributes(entity, obj, layer)
         return 1

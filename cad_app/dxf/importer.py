@@ -677,16 +677,19 @@ def _import_ellipse(entity, layers):
     if major_len <= Z_TOLERANCE:
         raise UnsupportedDXFEntity("ELLIPSE с нулевой большой полуосью")
 
-    if math.isclose(float(major_axis.y), 0.0, abs_tol=1e-6):
-        radius_x = major_len
-        radius_y = major_len * ratio
-    elif math.isclose(float(major_axis.x), 0.0, abs_tol=1e-6):
-        radius_x = major_len * ratio
-        radius_y = major_len
-    else:
-        raise UnsupportedDXFEntity("Повернутый ELLIPSE не поддерживается")
+    minor_len = abs(major_len * ratio)
+    major_angle = math.degrees(math.atan2(float(major_axis.y), float(major_axis.x)))
 
-    return Ellipse(Point(float(center.x), float(center.y)), radius_x, radius_y)
+    if major_len >= minor_len:
+        radius_x = major_len
+        radius_y = minor_len
+        rotation = major_angle
+    else:
+        radius_x = minor_len
+        radius_y = major_len
+        rotation = major_angle - 90.0
+
+    return Ellipse(Point(float(center.x), float(center.y)), radius_x, radius_y, rotation=rotation)
 
 
 def _import_spline(entity, layers):

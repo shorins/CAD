@@ -687,29 +687,42 @@ class CanvasWidget(QWidget):
                     click_point = Point(click_scene_pos.x(), click_scene_pos.y())
                     
                     if not self.construction_points:
-                        # Это Клик 2 (после старта): Фиксируем Rx
-                        rx = abs(click_point.x - center.x)
-                        if rx == 0: rx = 0.1
-                        # Сохраняем временные данные
+                        # Это клик 2: фиксируем направление и длину локальной оси X.
+                        rx = center.distance_to(click_point)
+                        if rx == 0:
+                            rx = 0.1
+                            click_point = Point(center.x + rx, center.y)
                         self._temp_ellipse_rx = rx
-                        self.construction_points.append(click_point) # Флаг, что Rx задан
-                        # НЕ сбрасываем self.start_pos
-                        return 
+                        self._temp_ellipse_rotation = math.degrees(
+                            math.atan2(click_point.y - center.y, click_point.x - center.x)
+                        )
+                        self.construction_points.append(click_point)
+                        return
                     else:
-                        # Это Клик 3: Фиксируем Ry и строим
+                        # Это клик 3: фиксируем длину локальной оси Y.
                         rx = self._temp_ellipse_rx
-                        ry = abs(click_point.y - center.y)
+                        rotation = getattr(self, '_temp_ellipse_rotation', 0.0)
+                        angle = math.radians(rotation + 90.0)
+                        normal_x = math.cos(angle)
+                        normal_y = math.sin(angle)
+                        ry = abs(
+                            (click_point.x - center.x) * normal_x
+                            + (click_point.y - center.y) * normal_y
+                        )
                         
                         if self._is_shift_pressed():
-                            ry = rx # Круг
+                            ry = rx
                         
-                        if ry == 0: ry = 0.1
+                        if ry == 0:
+                            ry = 0.1
                         
-                        obj = Ellipse(center, rx, ry, style_name=current_style)
+                        obj = Ellipse(center, rx, ry, style_name=current_style, rotation=rotation)
                         self.scene.add_object(obj)
                         self.construction_points = []
                         if hasattr(self, '_temp_ellipse_rx'):
                             delattr(self, '_temp_ellipse_rx')
+                        if hasattr(self, '_temp_ellipse_rotation'):
+                            delattr(self, '_temp_ellipse_rotation')
                 
                 elif active_tool == 'polygon':
                     # Многоугольник: center + radius
@@ -837,8 +850,10 @@ class CanvasWidget(QWidget):
             if hasattr(self, '_arc_radius'):
                 delattr(self, '_arc_radius')
             # Сбрасываем атрибуты эллипса
-            if hasattr(self, '_ellipse_radius_x'):
-                delattr(self, '_ellipse_radius_x')
+            if hasattr(self, '_temp_ellipse_rx'):
+                delattr(self, '_temp_ellipse_rx')
+            if hasattr(self, '_temp_ellipse_rotation'):
+                delattr(self, '_temp_ellipse_rotation')
             # Обновляем панель сплайна
             if self.spline_input_panel:
                 self.spline_input_panel.reset()
@@ -1308,17 +1323,26 @@ class CanvasWidget(QWidget):
     
     def _draw_ellipse(self, painter: QPainter, obj: Ellipse, pen: QPen):
         """Отрисовывает эллипс."""
-        center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
-        radius_x_screen = obj.radius_x * self.zoom_factor
-        radius_y_screen = obj.radius_y * self.zoom_factor
-        
-        rect = QRectF(
-            center_screen.x() - radius_x_screen,
-            center_screen.y() - radius_y_screen,
-            radius_x_screen * 2,
-            radius_y_screen * 2
-        )
-        painter.drawEllipse(rect)
+        painter.drawPath(self._build_ellipse_path(obj))
+
+    def _build_ellipse_path(self, obj: Ellipse, steps: int = 96) -> QPainterPath:
+        """Строит экранный путь для эллипса с учетом поворота."""
+        path = QPainterPath()
+        if obj.radius_x <= 0 or obj.radius_y <= 0:
+            return path
+
+        first_point = obj.point_at_angle(0.0)
+        first_screen = self.map_from_scene(QPointF(first_point.x, first_point.y))
+        path.moveTo(first_screen)
+
+        for index in range(1, steps + 1):
+            angle = math.tau * index / steps
+            point = obj.point_at_angle(angle)
+            screen_point = self.map_from_scene(QPointF(point.x, point.y))
+            path.lineTo(screen_point)
+
+        path.closeSubpath()
+        return path
     
     def _draw_polygon(self, painter: QPainter, obj: Polygon, pen: QPen):
         """Отрисовывает многоугольник."""
@@ -1401,16 +1425,7 @@ class CanvasWidget(QWidget):
                 for i in range(4):
                     painter.drawLine(screen_corners[i], screen_corners[(i + 1) % 4])
             elif isinstance(obj, Ellipse):
-                center_screen = self.map_from_scene(QPointF(obj.center.x, obj.center.y))
-                radius_x_screen = obj.radius_x * self.zoom_factor
-                radius_y_screen = obj.radius_y * self.zoom_factor
-                rect = QRectF(
-                    center_screen.x() - radius_x_screen,
-                    center_screen.y() - radius_y_screen,
-                    radius_x_screen * 2,
-                    radius_y_screen * 2
-                )
-                painter.drawEllipse(rect)
+                painter.drawPath(self._build_ellipse_path(obj))
             elif isinstance(obj, Polygon):
                 vertices = obj.vertices
                 screen_vertices = [self.map_from_scene(QPointF(v.x, v.y)) for v in vertices]
@@ -1590,50 +1605,62 @@ class CanvasWidget(QWidget):
         
         elif active_tool == 'ellipse':
             # Эллипс: Поэтапное построение (3 клика)
-            # Шаг 1: Центр (start_pos) -> Курсор (Rx)
-            # Шаг 2: Центр -> Rx (зафиксирован) -> Курсор (Ry)
+            # Шаг 1: Центр -> конец локальной оси X
+            # Шаг 2: длина локальной оси Y
             
             center_screen = self.start_pos
+            center_point = Point(start_scene_pos.x(), start_scene_pos.y())
             
             if not self.construction_points:
-                # Этап 1: Тянем Rx (показываем ось X)
-                rx = abs(self.current_pos.x() - center_screen.x())
+                axis_point = Point(current_scene_pos.x(), current_scene_pos.y())
+                rx = center_point.distance_to(axis_point)
+                rotation = math.degrees(math.atan2(axis_point.y - center_point.y, axis_point.x - center_point.x)) if rx > 0 else 0.0
+                axis_screen = self.map_from_scene(QPointF(axis_point.x, axis_point.y))
                 
-                # Рисуем осевую линию
                 painter.setPen(QPen(QColor(255, 100, 100), 1, Qt.PenStyle.DashLine))
-                painter.drawLine(int(center_screen.x()), int(center_screen.y()), int(self.current_pos.x()), int(center_screen.y()))
-                
-                # Рисуем призрачный круг для ориентира
+                painter.drawLine(center_screen, axis_screen)
+
+                temp_ellipse = Ellipse(center_point, max(rx, 0.1), max(rx, 0.1), rotation=rotation)
                 painter.setPen(QPen(QColor(255, 255, 255, 50), 1, Qt.PenStyle.DotLine))
-                painter.drawEllipse(center_screen, rx, rx)
-                
-                # Метка
+                painter.drawPath(self._build_ellipse_path(temp_ellipse))
+
                 painter.setPen(Qt.GlobalColor.white)
                 painter.drawText(self.current_pos + QPointF(10, -10), f"Rx: {rx / self.zoom_factor:.1f}")
                 
             else:
-                # Этап 2: Rx зафиксирован, тянем Ry
-                rx = getattr(self, '_temp_ellipse_rx', 50) * self.zoom_factor 
-                
-                ry = abs(self.current_pos.y() - center_screen.y())
-                
+                rx = max(getattr(self, '_temp_ellipse_rx', 0.1), 0.1)
+                rotation = getattr(self, '_temp_ellipse_rotation', 0.0)
+                angle = math.radians(rotation + 90.0)
+                normal_x = math.cos(angle)
+                normal_y = math.sin(angle)
+                cursor_point = Point(current_scene_pos.x(), current_scene_pos.y())
+                ry = abs(
+                    (cursor_point.x - center_point.x) * normal_x
+                    + (cursor_point.y - center_point.y) * normal_y
+                )
                 if self._is_shift_pressed():
                     ry = rx
-                    
-                # Рисуем зафиксированную ось X
+
+                axis_x_end = Point(
+                    center_point.x + math.cos(math.radians(rotation)) * rx,
+                    center_point.y + math.sin(math.radians(rotation)) * rx,
+                )
+                axis_y_end = Point(
+                    center_point.x + normal_x * ry,
+                    center_point.y + normal_y * ry,
+                )
+                axis_x_screen = self.map_from_scene(QPointF(axis_x_end.x, axis_x_end.y))
+                axis_y_screen = self.map_from_scene(QPointF(axis_y_end.x, axis_y_end.y))
+
                 painter.setPen(QPen(QColor(255, 100, 100), 1, Qt.PenStyle.SolidLine))
-                painter.drawLine(int(center_screen.x() - rx), int(center_screen.y()), int(center_screen.x() + rx), int(center_screen.y()))
-                
-                # Рисуем резиновую ось Y
+                painter.drawLine(center_screen, axis_x_screen)
                 painter.setPen(QPen(QColor(100, 255, 100), 1, Qt.PenStyle.DashLine))
-                painter.drawLine(int(center_screen.x()), int(center_screen.y()), int(center_screen.x()), int(self.current_pos.y()))
-                
-                # Рисуем сам эллипс
-                rect = QRectF(center_screen.x() - rx, center_screen.y() - ry, rx * 2, ry * 2)
+                painter.drawLine(center_screen, axis_y_screen)
+
+                temp_ellipse = Ellipse(center_point, rx, max(ry, 0.1), rotation=rotation)
                 painter.setPen(QPen(Qt.GlobalColor.white, 1, Qt.PenStyle.DashLine))
-                painter.drawEllipse(rect)
-                
-                # Метка
+                painter.drawPath(self._build_ellipse_path(temp_ellipse))
+
                 painter.drawText(self.current_pos + QPointF(10, -10), f"Ry: {ry / self.zoom_factor:.1f}")
         
         elif active_tool == 'polygon':
