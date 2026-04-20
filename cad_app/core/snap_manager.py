@@ -51,6 +51,7 @@ class SnapManager(QObject):
             SnapType.INTERSECTION,
             SnapType.PERPENDICULAR,
             SnapType.TANGENT,
+            SnapType.QUADRANT,
         }
         
         # Радиус захвата привязки в пикселях экрана
@@ -118,8 +119,20 @@ class SnapManager(QObject):
         self.enabled = enabled
         self.snap_settings_changed.emit()
 
-    # ==================== Поиск привязок ====================
-    
+    # Приоритеты привязок (меньше = выше приоритет)
+    SNAP_PRIORITY = {
+        SnapType.ENDPOINT: 1,
+        SnapType.MIDPOINT: 2,
+        SnapType.CENTER: 3,
+        SnapType.INTERSECTION: 4,
+        SnapType.QUADRANT: 5,
+        SnapType.PERPENDICULAR: 6,
+        SnapType.TANGENT: 7,
+        SnapType.NEAREST: 8,
+        SnapType.NODE: 5,
+        SnapType.GRID: 9,
+    }
+
     def find_snap(self, scene_x: float, scene_y: float, 
                   objects: List[GeometricPrimitive],
                   tolerance: float = 10.0,
@@ -129,13 +142,36 @@ class SnapManager(QObject):
                   zoom_factor: float = 1.0,
                   include_dimensions: bool = True) -> Optional[SnapPoint]:
         """
-        Находит лучшую точку привязки.
+        Находит лучшую точку привязки с учётом приоритетов.
+        При близких расстояниях побеждает привязка с высшим приоритетом.
         """
         if not self.enabled:
             return None
+        
+        # Порог для сравнения приоритетов: если разница расстояний меньше этого значения,
+        # выбираем привязку с более высоким приоритетом
+        priority_threshold = tolerance * 0.3
             
         best_snap = None
         best_distance = float('inf')
+        best_priority = 99
+        
+        def _consider(snap: SnapPoint, dist: float):
+            """Рассматривает кандидата с учётом приоритетов."""
+            nonlocal best_snap, best_distance, best_priority
+            if dist > tolerance:
+                return
+            priority = self.SNAP_PRIORITY.get(snap.snap_type, 99)
+            if best_snap is None:
+                best_snap, best_distance, best_priority = snap, dist, priority
+            elif dist < best_distance - priority_threshold:
+                # Значительно ближе — побеждает безусловно
+                best_snap, best_distance, best_priority = snap, dist, priority
+            elif abs(dist - best_distance) <= priority_threshold:
+                # Расстояния близки — побеждает более приоритетный тип
+                if priority < best_priority:
+                    best_snap, best_distance, best_priority = snap, dist, priority
+            # Иначе — текущий лучший остаётся
         
         # Фильтруем объекты рядом с курсором для оптимизации
         nearby_objects = []
@@ -157,8 +193,6 @@ class SnapManager(QObject):
             
             # 2. Проверка по центру (если активен Center Snap)
             elif check_center and hasattr(obj, 'center'):
-                 # Для Point из .geometry.point
-                 # Используем getattr на случай если center это tuple (хотя вряд ли)
                  cx = getattr(obj.center, 'x', obj.center[0] if isinstance(obj.center, (tuple, list)) else 0)
                  cy = getattr(obj.center, 'y', obj.center[1] if isinstance(obj.center, (tuple, list)) else 0)
                  
@@ -174,7 +208,7 @@ class SnapManager(QObject):
             points = obj.get_snap_points()
             
             # Добавляем Nearest если нужно
-            if SnapType.NEAREST in self._active_snaps:
+            if SnapType.NEAREST in self._active_snaps and hasattr(obj, 'get_nearest_point'):
                 nearest = obj.get_nearest_point(scene_x, scene_y)
                 if nearest:
                     points.append(nearest)
@@ -184,10 +218,7 @@ class SnapManager(QObject):
                     continue
                 
                 dist = sp.distance_to(scene_x, scene_y)
-                # Фильтруем по радиусу, как и раньше
-                if dist <= tolerance and dist < best_distance:
-                    best_distance = dist
-                    best_snap = sp
+                _consider(sp, dist)
 
         # 2. Пересечения (Intersection)
         if SnapType.INTERSECTION in self._active_snaps:
@@ -196,10 +227,7 @@ class SnapManager(QObject):
                 intersections = self.find_intersection(obj1, obj2)
                 for sp in intersections:
                     dist = sp.distance_to(scene_x, scene_y)
-                    # Intersection тоже требует близости курсора к точке
-                    if dist <= tolerance and dist < best_distance:
-                        best_distance = dist
-                        best_snap = sp
+                    _consider(sp, dist)
 
         # 3. Контекстные привязки (Perpendicular, Tangent)
         if reference_point:
@@ -216,83 +244,56 @@ class SnapManager(QObject):
                     perp_pt = self.find_perpendicular((ref_pt.x, ref_pt.y), obj)
                     if perp_pt:
                         dist = perp_pt.distance_to(scene_x, scene_y)
-                        if dist <= tolerance and dist < best_distance:
-                            best_distance = dist
-                            best_snap = perp_pt
+                        _consider(perp_pt, dist)
                     
-            # Tangent
+            # Tangent — используем реальное расстояние от курсора до точки касания
             if SnapType.TANGENT in self._active_snaps:
-                # Ищем только по объектам РЯДОМ (nearby_objects)
                 tan_candidates = [o for o in nearby_objects if isinstance(o, (Circle, Arc, Ellipse))]
                 
                 for obj in tan_candidates:
                     tan_pts = self.find_tangent((ref_pt.x, ref_pt.y), obj)
                     
                     for tan_pt in tan_pts:
+                        # Проверяем что мышь смотрит в сторону точки касания
                         vm_x = scene_x - ref_pt.x
                         vm_y = scene_y - ref_pt.y
-                        len_m_sq = vm_x*vm_x + vm_y*vm_y
-                        
-                        if len_m_sq < (tolerance**2): continue
-                            
                         vt_x = tan_pt.x - ref_pt.x
                         vt_y = tan_pt.y - ref_pt.y
                         len_t_sq = vt_x*vt_x + vt_y*vt_y
                         
-                        angle_mouse = math.degrees(math.atan2(vm_y, vm_x))
-                        angle_tan = math.degrees(math.atan2(vt_y, vt_x))
+                        if len_t_sq < 1e-9:
+                            continue
                         
-                        diff = abs(angle_mouse - angle_tan)
-                        while diff > 180: diff = 360 - diff
+                        # Проверяем угловое направление (мышь смотрит в ту же сторону)
+                        angle_mouse = math.atan2(vm_y, vm_x)
+                        angle_tan = math.atan2(vt_y, vt_x)
+                        diff = abs(math.degrees(angle_mouse - angle_tan))
+                        while diff > 180:
+                            diff = 360 - diff
                         
-                        # Расширим угол захвата до 10 градусов для удобства
-                        if diff < 10.0:
-                            if len_t_sq < 1e-9: continue
-                            dot_prod = vm_x * vt_x + vm_y * vt_y
-                            t = dot_prod / len_t_sq
-                            
-                            if t < 0.1: continue
-                            
-                            proj_x = ref_pt.x + t * vt_x
-                            proj_y = ref_pt.y + t * vt_y
-                            
-                            # BOOST PRIORITY:
-                            # Считаем 1 градус отклонения эквивалентным 0.1 единицам расстояния (пикселям).
-                            # Это делает касательную "сильнее" обычных привязок.
-                            weighted_diff = diff * 0.1
-                            
-                            if weighted_diff < best_distance:
-                                best_distance = weighted_diff
-                                best_snap = SnapPoint(proj_x, proj_y, SnapType.TANGENT, obj)
+                        if diff < 15.0:
+                            # Вычисляем реальное расстояние от курсора до точки касания
+                            dist = math.sqrt((scene_x - tan_pt.x)**2 + (scene_y - tan_pt.y)**2)
+                            snap_pt = SnapPoint(tan_pt.x, tan_pt.y, SnapType.TANGENT, obj)
+                            _consider(snap_pt, dist)
         
         # 4. Привязка к сетке (Grid Snap)
         if SnapType.GRID in self._active_snaps and grid_size is not None and grid_size > 0:
-            # Определяем эффективный шаг сетки
-            # Если zoom < 0.5, то показываются только major линии (x5 шаг)
             effective_step = grid_size
             if zoom_factor < 0.5:
                 effective_step = grid_size * 5
                 
-            # Ближайший узел сетки
             gx = round(scene_x / effective_step) * effective_step
             gy = round(scene_y / effective_step) * effective_step
             
             dist_grid = math.sqrt((scene_x - gx)**2 + (scene_y - gy)**2)
             
-            # Привязываемся к сетке, если она в радиусе доступа
-            # И если она ближе, чем другие найденные привязки (best_distance)
-            if dist_grid <= tolerance and dist_grid < best_distance:
-                # В качестве объекта передаем None, так как сетка не объект
-                 # Но так как SnapPoint требует source_object: GeometricPrimitive,
-                 # Придется либо разрешить None, либо передать фиктивный объект,
-                 # либо игнорировать source_object при отрисовке.
-                 # Python позволяет передать None если type checker не строг, 
-                 # но лучше проверим dataclass definition.
+            if dist_grid <= tolerance:
                  try:
-                     best_snap = SnapPoint(gx, gy, SnapType.GRID, None) # type: ignore
-                     best_distance = dist_grid
+                     grid_sp = SnapPoint(gx, gy, SnapType.GRID, None)  # type: ignore
+                     _consider(grid_sp, dist_grid)
                  except:
-                     pass # Fallback если строгая валидация
+                     pass
 
         return best_snap
     
@@ -389,6 +390,14 @@ class SnapManager(QObject):
 
         elif isinstance(to_object, Line):
             perp = to_object.get_perpendicular_point(pt)
+            # Проверяем что проекция лежит на отрезке (t ∈ [0,1])
+            dx = to_object.end.x - to_object.start.x
+            dy = to_object.end.y - to_object.start.y
+            len_sq = dx * dx + dy * dy
+            if len_sq > 0:
+                t = ((perp.x - to_object.start.x) * dx + (perp.y - to_object.start.y) * dy) / len_sq
+                if t < -1e-9 or t > 1.0 + 1e-9:
+                    return None
             return SnapPoint(perp.x, perp.y, SnapType.PERPENDICULAR, to_object)
             
         elif isinstance(to_object, (Circle, Arc)):

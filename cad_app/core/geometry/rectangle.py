@@ -161,6 +161,29 @@ class Rectangle(GeometricPrimitive):
         
         return points
 
+    def get_nearest_point(self, x: float, y: float) -> SnapPoint:
+        """Возвращает ближайшую точку на контуре прямоугольника."""
+        corners = self.corners
+        best_px, best_py = corners[0].x, corners[0].y
+        best_dist = float('inf')
+        for i in range(4):
+            p1 = corners[i]
+            p2 = corners[(i + 1) % 4]
+            dx = p2.x - p1.x
+            dy = p2.y - p1.y
+            len_sq = dx * dx + dy * dy
+            if len_sq == 0:
+                px, py = p1.x, p1.y
+            else:
+                t = max(0, min(1, ((x - p1.x) * dx + (y - p1.y) * dy) / len_sq))
+                px = p1.x + t * dx
+                py = p1.y + t * dy
+            dist = math.sqrt((x - px) ** 2 + (y - py) ** 2)
+            if dist < best_dist:
+                best_dist = dist
+                best_px, best_py = px, py
+        return SnapPoint(best_px, best_py, SnapType.NEAREST, self)
+
     # ==================== Контрольные точки ====================
     
     def get_control_points(self) -> List[ControlPoint]:
