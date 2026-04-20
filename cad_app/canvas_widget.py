@@ -92,6 +92,7 @@ class CanvasWidget(QWidget):
         
         # Инициализируем переменные до вызова on_settings_changed
         self.start_pos = None
+        self.start_scene_point = None  # Точная сценовая координата начала построения (Point)
         self.current_pos = None
         self.pan_start_pos = None
         self.camera_pos = QPointF(0, 0)
@@ -225,6 +226,7 @@ class CanvasWidget(QWidget):
         # Сбрасываем состояние
         self._spline_points = []
         self.start_pos = None
+        self.start_scene_point = None
         self.current_pos = None
         
         # Обновляем панель
@@ -409,6 +411,7 @@ class CanvasWidget(QWidget):
             dim.recompute(self.scene)
             self.scene.add_object(dim)
             self.start_pos = None
+            self.start_scene_point = None
             self.current_pos = None
             self.line_info_changed.emit("")
             self._reset_dimension_session()
@@ -440,6 +443,7 @@ class CanvasWidget(QWidget):
             dim.recompute(self.scene)
             self.scene.add_object(dim)
             self.start_pos = None
+            self.start_scene_point = None
             self.current_pos = None
             self.line_info_changed.emit("")
             self._reset_dimension_session()
@@ -483,6 +487,7 @@ class CanvasWidget(QWidget):
             dim.recompute(self.scene)
             self.scene.add_object(dim)
             self.start_pos = None
+            self.start_scene_point = None
             self.current_pos = None
             self.line_info_changed.emit("")
             self._reset_dimension_session()
@@ -613,6 +618,7 @@ class CanvasWidget(QWidget):
         # Обработка Escape для отмены построения линии
         if event.key() == Qt.Key.Key_Escape and self.start_pos:
             self.start_pos = None
+            self.start_scene_point = None
             self.current_pos = None
             self.update()
             event.accept()
@@ -846,8 +852,8 @@ class CanvasWidget(QWidget):
             
             if self.start_pos is None:
                 # Первый клик - начало построения
-                # Если сработала привязка, обновляем self.start_pos на экранную координату привязки
-                # чтобы последующие вычисления map_to_scene давали точную координату привязки
+                # Сохраняем точную сценовую координату (без потери точности через screen↔scene)
+                self.start_scene_point = Point(click_scene_pos.x(), click_scene_pos.y())
                 self.start_pos = self.map_from_scene(click_scene_pos)
                 self.current_pos = self.start_pos
                 
@@ -908,7 +914,7 @@ class CanvasWidget(QWidget):
                 self._update_line_info()
             else:
                 # Второй клик - завершение построения
-                start_scene_pos = self.map_to_scene(self.start_pos)
+                start_scene_pos = QPointF(self.start_scene_point.x, self.start_scene_point.y) if self.start_scene_point else self.map_to_scene(self.start_pos)
                 
                 if active_tool == 'line':
                     # Линия: от start до end
@@ -1220,6 +1226,7 @@ class CanvasWidget(QWidget):
                 
                 # Сбрасываем состояние построения
                 self.start_pos = None
+                self.start_scene_point = None
                 self.current_pos = None
                 self.line_info_changed.emit("")
         
@@ -1232,6 +1239,7 @@ class CanvasWidget(QWidget):
                 self._spline_points = []
             
             self.start_pos = None
+            self.start_scene_point = None
             self.current_pos = None
             self.construction_points = []  # Сбрасываем накопленные точки
             self._reset_dimension_session()
@@ -1990,7 +1998,7 @@ class CanvasWidget(QWidget):
         
         active_tool = self.get_active_drawing_tool()
         
-        start_scene_pos = self.map_to_scene(self.start_pos)
+        start_scene_pos = QPointF(self.start_scene_point.x, self.start_scene_point.y) if self.start_scene_point else self.map_to_scene(self.start_pos)
         current_scene_pos = self.map_to_scene(self.current_pos)
         
         if active_tool == 'line':
@@ -2421,7 +2429,7 @@ class CanvasWidget(QWidget):
             self.line_info_changed.emit("")
             return
         
-        start_scene_pos = self.map_to_scene(self.start_pos)
+        start_scene_pos = QPointF(self.start_scene_point.x, self.start_scene_point.y) if self.start_scene_point else self.map_to_scene(self.start_pos)
         current_scene_pos = self.map_to_scene(self.current_pos)
         
         # Вычисляем расстояние (длину линии)
@@ -2928,7 +2936,9 @@ class CanvasWidget(QWidget):
         
         # Определяем reference_point если мы в процессе построения (есть start_pos)
         reference_point = None
-        if self.start_pos:
+        if self.start_scene_point:
+            reference_point = self.start_scene_point
+        elif self.start_pos:
             start_scene_pos = self.map_to_scene(self.start_pos)
             reference_point = Point(start_scene_pos.x(), start_scene_pos.y())
         include_dimensions = not self._is_dimension_tool()

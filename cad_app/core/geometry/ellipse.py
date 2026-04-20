@@ -125,6 +125,33 @@ class Ellipse(GeometricPrimitive):
             SnapPoint(*self._world_from_local(0.0, -self.radius_y).to_tuple(), SnapType.QUADRANT, self),
         ]
 
+    def get_nearest_point(self, x: float, y: float) -> SnapPoint:
+        """Возвращает ближайшую точку на эллипсе (итеративная проекция)."""
+        local_x, local_y = self._local_from_world(Point(x, y))
+        if self.radius_x == 0 and self.radius_y == 0:
+            return SnapPoint(self.center.x, self.center.y, SnapType.NEAREST, self)
+        # Начальное приближение — угол к точке
+        angle = math.atan2(local_y * self.radius_x, local_x * self.radius_y)
+        # Итерации Newton-Raphson
+        for _ in range(10):
+            ex = self.radius_x * math.cos(angle)
+            ey = self.radius_y * math.sin(angle)
+            dx_e = local_x - ex
+            dy_e = local_y - ey
+            dex = -self.radius_x * math.sin(angle)
+            dey = self.radius_y * math.cos(angle)
+            ddex = -self.radius_x * math.cos(angle)
+            ddey = -self.radius_y * math.sin(angle)
+            f = dx_e * dex + dy_e * dey
+            fp = dx_e * ddex + dy_e * ddey - (dex * dex + dey * dey)
+            if abs(fp) < 1e-12:
+                break
+            angle -= f / fp
+        ex = self.radius_x * math.cos(angle)
+        ey = self.radius_y * math.sin(angle)
+        world_pt = self._world_from_local(ex, ey)
+        return SnapPoint(world_pt.x, world_pt.y, SnapType.NEAREST, self)
+
     def get_control_points(self) -> List[ControlPoint]:
         major = self.major_axis_endpoint
         minor = self.minor_axis_endpoint

@@ -77,6 +77,18 @@ class Line(GeometricPrimitive):
             SnapPoint(self.midpoint.x, self.midpoint.y, SnapType.MIDPOINT, self),
         ]
 
+    def get_nearest_point(self, x: float, y: float) -> SnapPoint:
+        """Возвращает ближайшую точку на отрезке."""
+        dx = self.end.x - self.start.x
+        dy = self.end.y - self.start.y
+        len_sq = dx * dx + dy * dy
+        if len_sq == 0:
+            return SnapPoint(self.start.x, self.start.y, SnapType.NEAREST, self)
+        t = max(0, min(1, ((x - self.start.x) * dx + (y - self.start.y) * dy) / len_sq))
+        px = self.start.x + t * dx
+        py = self.start.y + t * dy
+        return SnapPoint(px, py, SnapType.NEAREST, self)
+
     # ==================== Контрольные точки ====================
     
     def get_control_points(self) -> List[ControlPoint]:
