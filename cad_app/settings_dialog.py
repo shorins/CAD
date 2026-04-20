@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QSpinBox, 
-                               QPushButton, QDialogButtonBox, QColorDialog, QLabel, QComboBox)
+                               QPushButton, QDialogButtonBox, QColorDialog, QLabel, QComboBox, QDoubleSpinBox)
 from PySide6.QtGui import QColor
 from .settings import settings
+from .font_manager import dimension_font_choices
 
 class ColorPickerButton(QPushButton):
     """Кастомная кнопка для выбора цвета с предпросмотром."""
@@ -42,7 +43,24 @@ class SettingsDialog(QDialog):
         self.angle_units_combo.addItem("Радианы (rad)", "radians")
         form_layout.addRow("Единицы измерения углов:", self.angle_units_combo)
 
-        # 3. Настройка цветов
+        # 3. Глобальные параметры размеров
+        form_layout.addRow(QLabel("<b>Размеры:</b>"))
+        self.dimension_text_height_input = QDoubleSpinBox()
+        self.dimension_text_height_input.setRange(1.0, 20.0)
+        self.dimension_text_height_input.setDecimals(1)
+        form_layout.addRow("Высота текста размеров (мм):", self.dimension_text_height_input)
+
+        self.dimension_arrow_size_input = QDoubleSpinBox()
+        self.dimension_arrow_size_input.setRange(1.0, 20.0)
+        self.dimension_arrow_size_input.setDecimals(1)
+        form_layout.addRow("Размер стрелки размеров (мм):", self.dimension_arrow_size_input)
+
+        self.dimension_font_family_combo = QComboBox()
+        for label, family in dimension_font_choices():
+            self.dimension_font_family_combo.addItem(label, family)
+        form_layout.addRow("Шрифт размеров:", self.dimension_font_family_combo)
+
+        # 4. Настройка цветов
         form_layout.addRow(QLabel("<b>Цвета:</b>"))
         self.canvas_bg_picker = ColorPickerButton("#000000")
         self.grid_minor_picker = ColorPickerButton("#000000")
@@ -79,6 +97,14 @@ class SettingsDialog(QDialog):
         index = self.angle_units_combo.findData(angle_units)
         if index >= 0:
             self.angle_units_combo.setCurrentIndex(index)
+
+        dimensions = settings.get("dimensions") or settings.defaults["dimensions"]
+        self.dimension_text_height_input.setValue(float(dimensions.get("text_height_mm", 3.5)))
+        self.dimension_arrow_size_input.setValue(float(dimensions.get("arrow_size_mm", 3.5)))
+        mode = dimensions.get("font_mode", settings.defaults["dimensions"].get("font_mode"))
+        index = self.dimension_font_family_combo.findData(mode)
+        if index >= 0:
+            self.dimension_font_family_combo.setCurrentIndex(index)
         
         colors = settings.get("colors") or settings.defaults["colors"]
         self.canvas_bg_picker.set_color(colors.get("canvas_bg", "#000000"))
@@ -96,6 +122,13 @@ class SettingsDialog(QDialog):
         index = self.angle_units_combo.findData(angle_units)
         if index >= 0:
             self.angle_units_combo.setCurrentIndex(index)
+
+        dimensions = settings.defaults["dimensions"]
+        self.dimension_text_height_input.setValue(float(dimensions["text_height_mm"]))
+        self.dimension_arrow_size_input.setValue(float(dimensions["arrow_size_mm"]))
+        index = self.dimension_font_family_combo.findData(dimensions["font_mode"])
+        if index >= 0:
+            self.dimension_font_family_combo.setCurrentIndex(index)
         
         colors = settings.defaults["colors"]
         self.canvas_bg_picker.set_color(colors["canvas_bg"])
@@ -110,6 +143,13 @@ class SettingsDialog(QDialog):
         # Сохраняем единицы измерения углов
         angle_units = self.angle_units_combo.currentData()
         settings.set("angle_units", angle_units)
+
+        dimensions = {
+            "text_height_mm": self.dimension_text_height_input.value(),
+            "arrow_size_mm": self.dimension_arrow_size_input.value(),
+            "font_mode": self.dimension_font_family_combo.currentData(),
+        }
+        settings.set("dimensions", dimensions)
         
         colors = {
             "canvas_bg": self.canvas_bg_picker.color.name(QColor.NameFormat.HexArgb),

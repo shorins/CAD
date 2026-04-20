@@ -12,7 +12,7 @@ from PySide6.QtCore import Signal, Qt
 
 from .core.geometry import (
     Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
-    Point, GeometricPrimitive
+    Point, GeometricPrimitive, DimensionBase, LinearDimension, RadialDimension, DiameterDimension, AngularDimension, SUPPORTED_DIMENSION_LINE_STYLES
 )
 from .core.geometry.polygon import PolygonType
 from .dxf.mapping import aci_color_choices, normalize_object_aci
@@ -106,6 +106,8 @@ class EditPanel(QWidget):
             self._create_polygon_editor(obj)
         elif isinstance(obj, Spline):
             self._create_spline_editor(obj)
+        elif isinstance(obj, DimensionBase):
+            self._create_dimension_editor(obj)
         else:
             self.title_label.setText("Неизвестный тип объекта")
             self.hide()
@@ -203,6 +205,131 @@ class EditPanel(QWidget):
         self.current_object.aci_color = normalize_object_aci(selected_aci)
         self.current_object.true_color = None
         self._emit_change()
+
+    def _create_dimension_editor(self, obj: DimensionBase):
+        if isinstance(obj, LinearDimension):
+            self.title_label.setText("Линейный размер")
+        elif isinstance(obj, RadialDimension):
+            self.title_label.setText("Радиальный размер")
+        elif isinstance(obj, DiameterDimension):
+            self.title_label.setText("Диаметральный размер")
+        elif isinstance(obj, AngularDimension):
+            self.title_label.setText("Угловой размер")
+        else:
+            self.title_label.setText("Размер")
+
+        group = QGroupBox("Параметры размера")
+        layout = QFormLayout(group)
+
+        self.dim_text_override = QComboBox()
+        self.dim_text_override.setEditable(True)
+        self.dim_text_override.addItem("")
+        if obj.text_override:
+            self.dim_text_override.setCurrentText(obj.text_override)
+        self.dim_text_override.currentTextChanged.connect(self._on_dimension_text_override_changed)
+
+        self.dim_precision = QSpinBox()
+        self.dim_precision.setRange(0, 6)
+        self.dim_precision.setValue(int(obj.dimension_style.get("precision", 2)))
+        self.dim_precision.valueChanged.connect(self._on_dimension_precision_changed)
+
+        self.dim_arrow_type = QComboBox()
+        self.dim_arrow_type.addItem("Закрытая закрашенная", "closed_filled")
+        self.dim_arrow_type.addItem("Закрытая", "closed")
+        self.dim_arrow_type.addItem("Открытая", "open")
+        arrow_index = self.dim_arrow_type.findData(obj.dimension_style.get("arrow_type", "closed_filled"))
+        self.dim_arrow_type.setCurrentIndex(max(0, arrow_index))
+        self.dim_arrow_type.currentIndexChanged.connect(self._on_dimension_arrow_type_changed)
+
+        self.dim_line_style = QComboBox()
+        self.dim_ext_style = QComboBox()
+        for style_name in SUPPORTED_DIMENSION_LINE_STYLES:
+            self.dim_line_style.addItem(style_name, style_name)
+            self.dim_ext_style.addItem(style_name, style_name)
+        line_index = self.dim_line_style.findData(obj.dimension_style.get("dimension_line_style_name", "Сплошная тонкая"))
+        ext_index = self.dim_ext_style.findData(obj.dimension_style.get("extension_line_style_name", "Сплошная тонкая"))
+        self.dim_line_style.setCurrentIndex(max(0, line_index))
+        self.dim_ext_style.setCurrentIndex(max(0, ext_index))
+        self.dim_line_style.currentIndexChanged.connect(self._on_dimension_line_style_changed)
+        self.dim_ext_style.currentIndexChanged.connect(self._on_dimension_extension_style_changed)
+
+        layout.addRow("Текст override:", self.dim_text_override)
+        layout.addRow("Точность:", self.dim_precision)
+        layout.addRow("Тип стрелки:", self.dim_arrow_type)
+        layout.addRow("Линия размера:", self.dim_line_style)
+        layout.addRow("Выносные линии:", self.dim_ext_style)
+
+        fit_label = QLabel(self._dimension_fit_summary(obj))
+        fit_label.setWordWrap(True)
+        layout.addRow("Размещение:", fit_label)
+
+        anchor_label = QLabel("Ассоциативный" if obj.is_associative else "Фиксированный")
+        layout.addRow("Якоря:", anchor_label)
+
+        if obj.is_orphaned:
+            orphaned = QLabel("Базовый объект удалён, размер стал неассоциативным")
+            orphaned.setWordWrap(True)
+            orphaned.setStyleSheet("color: #C97A7A;")
+            layout.addRow(orphaned)
+
+        reset_button = QPushButton("Сбросить положение текста")
+        reset_button.clicked.connect(self._on_dimension_reset_text_position)
+        layout.addRow(reset_button)
+
+        flip_button = QPushButton("Поменять стрелки")
+        flip_button.clicked.connect(self._on_dimension_flip_arrows)
+        layout.addRow(flip_button)
+
+        info_label = QLabel(f"Измерено: {obj.format_measurement(obj.measured_value_cache)}")
+        layout.addRow(info_label)
+        self.content_layout.addWidget(group)
+        self.content_layout.addStretch()
+
+    def _dimension_fit_summary(self, obj: DimensionBase) -> str:
+        fit_result = obj.layout_state.get("fit_result", "inside")
+        labels = {
+            "inside": "Внутри",
+            "outside_text": "Текст снаружи",
+            "outside_arrows": "Стрелки снаружи",
+            "outside_both": "Текст и стрелки снаружи",
+        }
+        return labels.get(fit_result, fit_result)
+
+    def _on_dimension_text_override_changed(self, value: str):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.text_override = value or None
+            self._emit_change()
+
+    def _on_dimension_precision_changed(self, value: int):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.dimension_style["precision"] = value
+            self._emit_change()
+
+    def _on_dimension_arrow_type_changed(self, index: int):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.dimension_style["arrow_type"] = self.dim_arrow_type.itemData(index)
+            self.current_object.dimension_style.pop("arrow_fill", None)
+            self._emit_change()
+
+    def _on_dimension_line_style_changed(self, index: int):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.dimension_style["dimension_line_style_name"] = self.dim_line_style.itemData(index)
+            self._emit_change()
+
+    def _on_dimension_extension_style_changed(self, index: int):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.dimension_style["extension_line_style_name"] = self.dim_ext_style.itemData(index)
+            self._emit_change()
+
+    def _on_dimension_reset_text_position(self):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.reset_text_position()
+            self._emit_change()
+
+    def _on_dimension_flip_arrows(self):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.flip_arrows()
+            self._emit_change()
     
     # ==================== Редакторы для каждого типа ====================
     

@@ -1,6 +1,7 @@
 import json
 import copy
 from PySide6.QtCore import QObject, Signal
+from .font_manager import DIMENSION_FONT_MODE_GOST_ITALIC
 
 class AppSettings(QObject):
     settings_changed = Signal()
@@ -11,6 +12,11 @@ class AppSettings(QObject):
             "grid_step": 50,
             "line_construction_mode": "cartesian",  # "cartesian" или "polar"
             "angle_units": "degrees",  # "degrees" или "radians"
+            "dimensions": {
+                "text_height_mm": 3.5,
+                "arrow_size_mm": 3.5,
+                "font_mode": DIMENSION_FONT_MODE_GOST_ITALIC,
+            },
             "colors": {
                 "canvas_bg": "#2D2D2D",
                 "grid_minor": "#1EFFFFFF",

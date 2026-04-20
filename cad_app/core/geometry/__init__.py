@@ -24,9 +24,20 @@ from .rectangle import Rectangle
 from .ellipse import Ellipse
 from .polygon import Polygon, PolygonType
 from .spline import Spline
+from .dimensions import (
+    DimensionAnchor,
+    DimensionBase,
+    LinearDimension,
+    RadialDimension,
+    DiameterDimension,
+    AngularDimension,
+    SUPPORTED_DIMENSION_LINE_STYLES,
+    default_dimension_style,
+    resolve_selector_point,
+)
 
 # Для удобства импорта всех примитивов одним списком
-ALL_PRIMITIVES = [PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline]
+ALL_PRIMITIVES = [PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline, LinearDimension, RadialDimension, DiameterDimension, AngularDimension]
 
 __all__ = [
     # Базовые
@@ -46,6 +57,15 @@ __all__ = [
     'Polygon',
     'PolygonType',
     'Spline',
+    'DimensionAnchor',
+    'DimensionBase',
+    'LinearDimension',
+    'RadialDimension',
+    'DiameterDimension',
+    'AngularDimension',
+    'SUPPORTED_DIMENSION_LINE_STYLES',
+    'default_dimension_style',
+    'resolve_selector_point',
     # Списки
     'ALL_PRIMITIVES',
 ]

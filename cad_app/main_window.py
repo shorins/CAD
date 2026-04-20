@@ -12,7 +12,7 @@ from .core.scene import Scene
 from .core.layers import LayerRecord
 from .core.geometry import (
     Point, PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
-    GeometricPrimitive
+    GeometricPrimitive, LinearDimension, RadialDimension, DiameterDimension, AngularDimension, DimensionBase
 )
 from .core.style_manager import style_manager
 from .canvas_widget import CanvasWidget
@@ -26,14 +26,17 @@ from .rectangle_input_panel import RectangleInputPanel
 from .ellipse_input_panel import EllipseInputPanel
 from .polygon_input_panel import PolygonInputPanel
 from .spline_input_panel import SplineInputPanel
+from .dimension_input_panel import DimensionInputPanel
 from .edit_panel import EditPanel
 from .icon_utils import load_svg_icon
 from .layer_manager_dialog import LayerManagerDialog
 from .dxf import export_dxf_file, import_dxf_file
+from .font_manager import ensure_app_fonts_loaded
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        ensure_app_fonts_loaded()
         self.setWindowTitle("shorins CAD")
         self.setGeometry(100, 100, 1000, 700)
         self.showMaximized() # во весь экран на macOS
@@ -56,6 +59,10 @@ class MainWindow(QMainWindow):
             'ellipse': self.ellipse_tool_action,
             'polygon': self.polygon_tool_action,
             'spline': self.spline_tool_action,
+            'linear_dimension': self.linear_dimension_tool_action,
+            'radial_dimension': self.radial_dimension_tool_action,
+            'diameter_dimension': self.diameter_dimension_tool_action,
+            'angular_dimension': self.angular_dimension_tool_action,
             'delete': self.delete_tool_action,
         }
         
@@ -88,6 +95,10 @@ class MainWindow(QMainWindow):
         self.ellipse_tool_action.toggled.connect(self._update_tool_label)
         self.polygon_tool_action.toggled.connect(self._update_tool_label)
         self.spline_tool_action.toggled.connect(self._update_tool_label)
+        self.linear_dimension_tool_action.toggled.connect(self._update_tool_label)
+        self.radial_dimension_tool_action.toggled.connect(self._update_tool_label)
+        self.diameter_dimension_tool_action.toggled.connect(self._update_tool_label)
+        self.angular_dimension_tool_action.toggled.connect(self._update_tool_label)
         self.delete_tool_action.toggled.connect(self._update_tool_label)
         self.pan_tool_action.toggled.connect(self._update_tool_label)
         self.select_tool_action.toggled.connect(self._update_tool_label)
@@ -103,6 +114,10 @@ class MainWindow(QMainWindow):
         self.ellipse_tool_action.toggled.connect(self._on_tool_toggled)
         self.polygon_tool_action.toggled.connect(self._on_tool_toggled)
         self.spline_tool_action.toggled.connect(self._on_tool_toggled)
+        self.linear_dimension_tool_action.toggled.connect(self._on_tool_toggled)
+        self.radial_dimension_tool_action.toggled.connect(self._on_tool_toggled)
+        self.diameter_dimension_tool_action.toggled.connect(self._on_tool_toggled)
+        self.angular_dimension_tool_action.toggled.connect(self._on_tool_toggled)
 
         # Связываем выделение с комбобоксом стилей и панелью редактирования
         self.canvas.selection_changed.connect(self._update_style_combo_by_selection)
@@ -167,6 +182,22 @@ class MainWindow(QMainWindow):
         self.spline_tool_action.setCheckable(True)
         self.spline_tool_action.setToolTip("Сплайн (S)")
         self.spline_tool_action.setShortcut("S")
+
+        self.linear_dimension_tool_action = QAction("Лин. размер", self)
+        self.linear_dimension_tool_action.setCheckable(True)
+        self.linear_dimension_tool_action.setToolTip("Линейный размер")
+
+        self.radial_dimension_tool_action = QAction("Радиус", self)
+        self.radial_dimension_tool_action.setCheckable(True)
+        self.radial_dimension_tool_action.setToolTip("Радиальный размер")
+
+        self.diameter_dimension_tool_action = QAction("Диаметр", self)
+        self.diameter_dimension_tool_action.setCheckable(True)
+        self.diameter_dimension_tool_action.setToolTip("Диаметральный размер")
+
+        self.angular_dimension_tool_action = QAction("Угол", self)
+        self.angular_dimension_tool_action.setCheckable(True)
+        self.angular_dimension_tool_action.setToolTip("Угловой размер")
 
         self.delete_tool_action = QAction(load_svg_icon("public/delete.svg"), "Удалить", self)
         self.delete_tool_action.setCheckable(True)
@@ -251,6 +282,10 @@ class MainWindow(QMainWindow):
         tool_group.addAction(self.ellipse_tool_action)
         tool_group.addAction(self.polygon_tool_action)
         tool_group.addAction(self.spline_tool_action)
+        tool_group.addAction(self.linear_dimension_tool_action)
+        tool_group.addAction(self.radial_dimension_tool_action)
+        tool_group.addAction(self.diameter_dimension_tool_action)
+        tool_group.addAction(self.angular_dimension_tool_action)
         tool_group.addAction(self.delete_tool_action)
         tool_group.addAction(self.pan_tool_action)
         
@@ -267,6 +302,11 @@ class MainWindow(QMainWindow):
         edit_toolbar.addAction(self.ellipse_tool_action)
         edit_toolbar.addAction(self.polygon_tool_action)
         edit_toolbar.addAction(self.spline_tool_action)
+        edit_toolbar.addSeparator()
+        edit_toolbar.addAction(self.linear_dimension_tool_action)
+        edit_toolbar.addAction(self.radial_dimension_tool_action)
+        edit_toolbar.addAction(self.diameter_dimension_tool_action)
+        edit_toolbar.addAction(self.angular_dimension_tool_action)
         
         edit_toolbar.addSeparator()  # Разделитель после примитивов
         
@@ -328,10 +368,11 @@ class MainWindow(QMainWindow):
     
     def _update_input_panels_visibility(self):
         """Обновляет видимость панелей ввода в зависимости от активного инструмента."""
+        self.canvas.sync_dimension_tool(None)
         # Скрываем все панели
         for toolbar_name in ['line_input_toolbar', 'circle_input_toolbar', 'arc_input_toolbar',
                             'rectangle_input_toolbar', 'ellipse_input_toolbar', 
-                            'polygon_input_toolbar', 'spline_input_toolbar']:
+                            'polygon_input_toolbar', 'spline_input_toolbar', 'dimension_input_toolbar']:
             if hasattr(self, toolbar_name):
                 getattr(self, toolbar_name).hide()
         
@@ -350,6 +391,16 @@ class MainWindow(QMainWindow):
             self.polygon_input_toolbar.show()
         elif self.spline_tool_action.isChecked() and hasattr(self, 'spline_input_toolbar'):
             self.spline_input_toolbar.show()
+        elif (
+            self.linear_dimension_tool_action.isChecked()
+            or self.radial_dimension_tool_action.isChecked()
+            or self.diameter_dimension_tool_action.isChecked()
+            or self.angular_dimension_tool_action.isChecked()
+        ) and hasattr(self, 'dimension_input_toolbar'):
+            active_dimension_tool = self.canvas.get_active_drawing_tool()
+            self.dimension_input_panel.set_active_tool(active_dimension_tool)
+            self.canvas.sync_dimension_tool(active_dimension_tool)
+            self.dimension_input_toolbar.show()
     
     def _on_line_tool_toggled(self, checked):
         """Обработчик переключения инструмента 'линия'."""
@@ -545,6 +596,12 @@ class MainWindow(QMainWindow):
         self.spline_input_toolbar.addWidget(self.spline_input_panel)
         self.spline_input_toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.spline_input_toolbar)
+
+        self.dimension_input_panel = DimensionInputPanel(self)
+        self.dimension_input_toolbar = QToolBar("Ввод размеров")
+        self.dimension_input_toolbar.addWidget(self.dimension_input_panel)
+        self.dimension_input_toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.dimension_input_toolbar)
         
         # Передаём ссылки на панели в canvas для получения метода построения
         self.canvas.circle_input_panel = self.circle_input_panel
@@ -553,6 +610,7 @@ class MainWindow(QMainWindow):
         self.canvas.ellipse_input_panel = self.ellipse_input_panel
         self.canvas.polygon_input_panel = self.polygon_input_panel
         self.canvas.spline_input_panel = self.spline_input_panel
+        self.canvas.dimension_input_panel = self.dimension_input_panel
         
         # Показываем панель для активного инструмента
         self._update_input_panels_visibility()
@@ -590,6 +648,7 @@ class MainWindow(QMainWindow):
     
     def _on_edit_panel_object_changed(self):
         """Обработчик изменения объекта через панель редактирования."""
+        self.scene.recompute_dimensions()
         self.scene.scene_changed.emit()
         self.canvas.update()
 
@@ -700,7 +759,8 @@ class MainWindow(QMainWindow):
 
         if selected:
             for obj in selected:
-                # Применяем стиль ко всем выделенным объектам (все GeometricPrimitive)
+                if isinstance(obj, DimensionBase):
+                    continue
                 obj.style_name = style_name
             self.scene.scene_changed.emit()
             # Обновляем комбобокс после применения, чтобы отображать текущий стиль выделения
@@ -728,6 +788,9 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 self.style_combo.setCurrentIndex(index)
         else:
+            if all(isinstance(obj, DimensionBase) for obj in selected_objects):
+                self.style_combo.blockSignals(False)
+                return
             first_style = selected_objects[0].style_name
             all_same = all(obj.style_name == first_style for obj in selected_objects)
 
@@ -839,6 +902,14 @@ class MainWindow(QMainWindow):
             self.tool_label.setText("Инструмент: Многоугольник")
         elif self.spline_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Сплайн")
+        elif self.linear_dimension_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Линейный размер")
+        elif self.radial_dimension_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Радиус")
+        elif self.diameter_dimension_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Диаметр")
+        elif self.angular_dimension_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Угол")
         elif self.delete_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Удаление")
         elif self.pan_tool_action.isChecked():
@@ -941,6 +1012,10 @@ class MainWindow(QMainWindow):
                     "ellipse": Ellipse,
                     "polygon": Polygon,
                     "spline": Spline,
+                    "linear_dimension": LinearDimension,
+                    "radial_dimension": RadialDimension,
+                    "diameter_dimension": DiameterDimension,
+                    "angular_dimension": AngularDimension,
                 }
                 
                 new_objects = []
@@ -956,6 +1031,7 @@ class MainWindow(QMainWindow):
                 # Добавляем все объекты в сцену
                 for obj in new_objects:
                     self.scene.add_object(obj)
+                self.scene.recompute_dimensions()
                 self._reload_layers_into_combo()
 
             except Exception as e:
