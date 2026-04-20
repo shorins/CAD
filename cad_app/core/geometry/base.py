@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from enum import Enum, auto
 from typing import List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+import uuid
 
 if TYPE_CHECKING:
     from .point import Point
@@ -71,6 +72,7 @@ class GeometricPrimitive(ABC):
     
     def __init__(self, style_name: str = "Сплошная основная"):
         self.style_name = style_name
+        self.object_id: str = uuid.uuid4().hex
         self.layer_name: Optional[str] = None
         self.aci_color: Optional[int] = None
         self.true_color: Optional[int] = None
@@ -87,6 +89,7 @@ class GeometricPrimitive(ABC):
         """Сериализация общих атрибутов примитива."""
         return {
             "style": self.style_name,
+            "object_id": self.object_id,
             "dxf": {
                 "layer_name": self.layer_name,
                 "aci_color": self.aci_color,
@@ -105,6 +108,7 @@ class GeometricPrimitive(ABC):
     def _load_common(self, data: dict):
         """Восстанавливает общие атрибуты примитива."""
         self.style_name = data.get("style", self.style_name)
+        self.object_id = data.get("object_id", self.object_id)
         dxf_data = data.get("dxf", {})
         if not isinstance(dxf_data, dict):
             return

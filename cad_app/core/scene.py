@@ -1,6 +1,7 @@
 from PySide6.QtCore import QObject, Signal
 
 from .layers import LayerRecord, default_layer
+from .geometry import DimensionBase
 
 class Scene(QObject):
     # Сигнал, который будет испускаться при любом изменении в сцене
@@ -25,11 +26,13 @@ class Scene(QObject):
             obj.layer_name = self.current_layer_name
         self.ensure_layer(obj.layer_name)
         self.objects.append(obj)
+        self.recompute_dimensions()
         self.scene_changed.emit() # Уведомляем о изменении
 
     def remove_object(self, obj):
         if obj in self.objects:
             self.objects.remove(obj)
+            self.recompute_dimensions()
             self.scene_changed.emit()
 
     def clear(self):
@@ -45,6 +48,17 @@ class Scene(QObject):
         }
         self.last_import_report = None
         self.scene_changed.emit()
+
+    def get_object_by_id(self, object_id: str):
+        for obj in self.objects:
+            if getattr(obj, "object_id", None) == object_id:
+                return obj
+        return None
+
+    def recompute_dimensions(self):
+        for obj in self.objects:
+            if isinstance(obj, DimensionBase):
+                obj.recompute(self)
 
     def ensure_layer(self, name: str, layer: LayerRecord | None = None) -> LayerRecord:
         layer_name = name or "0"

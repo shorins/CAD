@@ -12,7 +12,7 @@ from typing import List, Optional, Set
 from dataclasses import dataclass
 from PySide6.QtCore import QObject, Signal
 
-from .geometry import SnapPoint, SnapType, GeometricPrimitive
+from .geometry import SnapPoint, SnapType, GeometricPrimitive, DimensionBase
 
 
 @dataclass
@@ -126,7 +126,8 @@ class SnapManager(QObject):
                   exclude_object: Optional[GeometricPrimitive] = None,
                   reference_point: Optional[tuple] = None,
                   grid_size: Optional[float] = None,
-                  zoom_factor: float = 1.0) -> Optional[SnapPoint]:
+                  zoom_factor: float = 1.0,
+                  include_dimensions: bool = True) -> Optional[SnapPoint]:
         """
         Находит лучшую точку привязки.
         """
@@ -144,6 +145,8 @@ class SnapManager(QObject):
         
         for obj in objects:
             if obj is exclude_object:
+                continue
+            if not include_dimensions and isinstance(obj, DimensionBase):
                 continue
                 
             is_nearby = False

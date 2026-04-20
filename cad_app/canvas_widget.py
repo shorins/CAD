@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QPointF, Signal, QTimer, QRectF
 from .core.scene import Scene
 from .core.geometry import (
     Point, PointEntity, Line, Circle, Arc, Rectangle, Ellipse, Polygon, Spline,
-    GeometricPrimitive, SnapType
+    GeometricPrimitive, SnapType, DimensionBase, LinearDimension, RadialDimension, DiameterDimension, AngularDimension, DimensionAnchor
 )
 from .core.snap_manager import snap_manager
 # from .core.algorithms import bresenham
@@ -32,7 +32,7 @@ class CanvasWidget(QWidget):
             scene: Сцена с объектами
             tool_actions: Словарь с actions инструментов:
                 'select', 'line', 'circle', 'arc', 'rectangle', 
-                'ellipse', 'polygon', 'spline', 'delete'
+                'ellipse', 'polygon', 'spline', 'linear_dimension', 'radial_dimension', 'diameter_dimension', 'angular_dimension', 'delete'
         """
         legacy_mode = not isinstance(tool_actions, dict)
         legacy_line_action = None
@@ -57,6 +57,10 @@ class CanvasWidget(QWidget):
                 'ellipse': QAction(self),
                 'polygon': QAction(self),
                 'spline': QAction(self),
+                'linear_dimension': QAction(self),
+                'radial_dimension': QAction(self),
+                'diameter_dimension': QAction(self),
+                'angular_dimension': QAction(self),
                 'delete': legacy_delete_action or QAction(self),
             }
         else:
@@ -71,6 +75,10 @@ class CanvasWidget(QWidget):
         self.ellipse_tool_action = self.tool_actions.get('ellipse')
         self.polygon_tool_action = self.tool_actions.get('polygon')
         self.spline_tool_action = self.tool_actions.get('spline')
+        self.linear_dimension_tool_action = self.tool_actions.get('linear_dimension')
+        self.radial_dimension_tool_action = self.tool_actions.get('radial_dimension')
+        self.diameter_dimension_tool_action = self.tool_actions.get('diameter_dimension')
+        self.angular_dimension_tool_action = self.tool_actions.get('angular_dimension')
         self.delete_tool_action = self.tool_actions.get('delete')
         
         # Сбрасываем выделение при выходе из режима удаления
@@ -153,6 +161,7 @@ class CanvasWidget(QWidget):
         # Состояние построения примитивов (для многокликовых методов)
         self.construction_points = []  # Накопленные точки (Point)
         self.construction_method = None  # Текущий метод построения (строка)
+        self.dimension_session = None
         
         # Ссылки на панели ввода (устанавливаются из MainWindow)
         self.circle_input_panel = None
@@ -161,6 +170,7 @@ class CanvasWidget(QWidget):
         self.ellipse_input_panel = None
         self.polygon_input_panel = None
         self.spline_input_panel = None
+        self.dimension_input_panel = None
         
         self.on_settings_changed() # Вызываем при старте, чтобы установить фон
         
@@ -172,7 +182,8 @@ class CanvasWidget(QWidget):
         """
         Возвращает имя активного инструмента рисования.
         Returns:
-            'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon', 'spline' или None
+            'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon', 'spline',
+            'linear_dimension', 'radial_dimension', 'diameter_dimension', 'angular_dimension' или None
         """
         if self.line_tool_action and self.line_tool_action.isChecked():
             return 'line'
@@ -188,6 +199,14 @@ class CanvasWidget(QWidget):
             return 'polygon'
         if self.spline_tool_action and self.spline_tool_action.isChecked():
             return 'spline'
+        if self.linear_dimension_tool_action and self.linear_dimension_tool_action.isChecked():
+            return 'linear_dimension'
+        if self.radial_dimension_tool_action and self.radial_dimension_tool_action.isChecked():
+            return 'radial_dimension'
+        if self.diameter_dimension_tool_action and self.diameter_dimension_tool_action.isChecked():
+            return 'diameter_dimension'
+        if self.angular_dimension_tool_action and self.angular_dimension_tool_action.isChecked():
+            return 'angular_dimension'
         return None
     
     def is_drawing_tool_active(self) -> bool:
@@ -214,6 +233,279 @@ class CanvasWidget(QWidget):
         
         self.update()
 
+    def _make_anchor_from_snap(self, snap_point) -> DimensionAnchor:
+        if not snap_point:
+            return DimensionAnchor(mode="fixed")
+        selector = self._selector_from_snap(snap_point)
+        if selector and getattr(snap_point.source_object, "object_id", None):
+            return DimensionAnchor(
+                mode="object_snap",
+                object_id=snap_point.source_object.object_id,
+                selector=selector,
+                cached_point=Point(snap_point.x, snap_point.y),
+            )
+        return DimensionAnchor(mode="fixed", cached_point=Point(snap_point.x, snap_point.y))
+
+    def _selector_from_snap(self, snap_point) -> str | None:
+        obj = getattr(snap_point, "source_object", None)
+        if obj is None:
+            return None
+        point = Point(snap_point.x, snap_point.y)
+        if isinstance(obj, Line):
+            if point.distance_to(obj.start) < 1e-6:
+                return "start"
+            if point.distance_to(obj.end) < 1e-6:
+                return "end"
+            if point.distance_to(obj.midpoint) < 1e-6:
+                return "mid"
+        if isinstance(obj, Circle):
+            if point.distance_to(obj.center) < 1e-6:
+                return "center"
+            return "radius_point"
+        if isinstance(obj, Arc):
+            if point.distance_to(obj.center) < 1e-6:
+                return "center"
+            if point.distance_to(obj.start_point) < 1e-6:
+                return "arc_start"
+            if point.distance_to(obj.end_point) < 1e-6:
+                return "arc_end"
+            if point.distance_to(obj.mid_point) < 1e-6:
+                return "arc_mid"
+        if isinstance(obj, Rectangle):
+            for index, vertex in enumerate(obj.corners):
+                if point.distance_to(vertex) < 1e-6:
+                    return f"vertex:{index}"
+            for index in range(len(obj.corners)):
+                mid = obj.corners[index].midpoint(obj.corners[(index + 1) % len(obj.corners)])
+                if point.distance_to(mid) < 1e-6:
+                    return f"midpoint:{index}"
+        if isinstance(obj, Polygon):
+            for index, vertex in enumerate(obj.vertices):
+                if point.distance_to(vertex) < 1e-6:
+                    return f"vertex:{index}"
+            for index in range(len(obj.vertices)):
+                mid = obj.vertices[index].midpoint(obj.vertices[(index + 1) % len(obj.vertices)])
+                if point.distance_to(mid) < 1e-6:
+                    return f"midpoint:{index}"
+        if isinstance(obj, Ellipse):
+            if point.distance_to(obj.center) < 1e-6:
+                return "ellipse_center"
+            return "ellipse_q0"
+        if isinstance(obj, Spline):
+            for index, cp in enumerate(obj.control_points):
+                if point.distance_to(cp) < 1e-6:
+                    return f"spline_cp:{index}"
+        return None
+
+    def _point_from_scene_or_snap(self, scene_pos: QPointF) -> tuple[Point, DimensionAnchor]:
+        if self.current_snap_point and not isinstance(getattr(self.current_snap_point, "source_object", None), DimensionBase):
+            point = Point(self.current_snap_point.x, self.current_snap_point.y)
+            return point, self._make_anchor_from_snap(self.current_snap_point)
+        point = Point(scene_pos.x(), scene_pos.y())
+        return point, DimensionAnchor(mode="fixed", cached_point=point.copy())
+
+    def _normalize_dimension_text_angle(self, angle: float) -> float:
+        normalized = angle % 360.0
+        if 90.0 < normalized < 270.0:
+            normalized = (normalized + 180.0) % 360.0
+        return normalized
+
+    def _is_dimension_tool(self, tool_name: str | None = None) -> bool:
+        tool_name = tool_name or self.get_active_drawing_tool()
+        return tool_name in {"linear_dimension", "radial_dimension", "diameter_dimension", "angular_dimension"}
+
+    def _reset_dimension_session(self):
+        self.dimension_session = None
+        self.construction_points = []
+
+    def _set_dimension_hint(self, tool_name: str | None = None):
+        if not self.dimension_input_panel:
+            return
+        tool_name = tool_name or self.get_active_drawing_tool() or "linear_dimension"
+        session = self.dimension_session or {"step": 0}
+        step = session.get("step", 0)
+        if tool_name == "linear_dimension":
+            hints = {
+                0: "Выберите первую точку",
+                1: "Выберите вторую точку",
+                2: "Укажите положение размерной линии",
+            }
+        elif tool_name == "radial_dimension":
+            hints = {
+                0: "Выберите окружность или дугу",
+                1: "Укажите положение размера",
+            }
+        elif tool_name == "diameter_dimension":
+            hints = {
+                0: "Выберите окружность",
+                1: "Укажите положение размера",
+            }
+        else:
+            hints = {
+                0: "Выберите первую линию или вершину угла",
+                1: "Выберите вторую линию или первую сторону угла",
+                2: "Выберите вторую сторону угла",
+                3: "Укажите положение дуги и текста",
+            }
+        self.dimension_input_panel.hint_label.setText(hints.get(step, ""))
+
+    def _dimension_preview_point(self, fallback_scene_pos: QPointF) -> tuple[Point, DimensionAnchor]:
+        return self._point_from_scene_or_snap(fallback_scene_pos)
+
+    def sync_dimension_tool(self, tool_name: str | None):
+        if self.dimension_session and self.dimension_session.get("tool") != tool_name:
+            self._reset_dimension_session()
+            self.start_pos = None
+            self.current_pos = None
+        self._set_dimension_hint(tool_name)
+
+    def _dimension_anchors_for_object(self, obj, tool_name: str):
+        if tool_name == "radial_dimension":
+            if isinstance(obj, Circle):
+                return (
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="center", cached_point=obj.center.copy()),
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="radius_point", cached_point=Point(obj.center.x + obj.radius, obj.center.y)),
+                )
+            if isinstance(obj, Arc):
+                return (
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="center", cached_point=obj.center.copy()),
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="arc_mid", cached_point=obj.mid_point.copy()),
+                )
+        if tool_name == "diameter_dimension":
+            if isinstance(obj, Circle):
+                return (
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="center", cached_point=obj.center.copy()),
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="radius_point", cached_point=Point(obj.center.x + obj.radius, obj.center.y)),
+                )
+            if isinstance(obj, Arc):
+                return (
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="center", cached_point=obj.center.copy()),
+                    DimensionAnchor(mode="object_snap", object_id=obj.object_id, selector="arc_mid", cached_point=obj.mid_point.copy()),
+                )
+        return None
+
+    def _handle_dimension_left_click(self, active_tool: str, event: QMouseEvent, click_scene_pos: QPointF):
+        if active_tool == "linear_dimension":
+            _, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
+            mode = self.dimension_input_panel.get_linear_mode() if self.dimension_input_panel else "aligned"
+            if not self.dimension_session:
+                self.dimension_session = {"tool": active_tool, "step": 1, "anchors": [click_anchor]}
+                self.start_pos = self.map_from_scene(click_scene_pos)
+                self.current_pos = self.start_pos
+                self._set_dimension_hint(active_tool)
+                self.update()
+                return True
+            if self.dimension_session["step"] == 1:
+                self.dimension_session["anchors"].append(click_anchor)
+                self.dimension_session["step"] = 2
+                self.start_pos = self.map_from_scene(click_scene_pos)
+                self.current_pos = self.start_pos
+                self._set_dimension_hint(active_tool)
+                self.update()
+                return True
+            anchors = self.dimension_session["anchors"]
+            dim = LinearDimension(anchors[0], anchors[1], mode=mode)
+            dim.dimension_line_anchor = click_anchor
+            dim.recompute(self.scene)
+            self.scene.add_object(dim)
+            self.start_pos = None
+            self.current_pos = None
+            self.line_info_changed.emit("")
+            self._reset_dimension_session()
+            self._set_dimension_hint(active_tool)
+            return True
+
+        if active_tool in {"radial_dimension", "diameter_dimension"}:
+            if not self.dimension_session:
+                clicked_object = self._get_object_at_cursor(event.position(), include_dimensions=False)
+                anchors = self._dimension_anchors_for_object(clicked_object, active_tool)
+                if not anchors:
+                    return True
+                self.dimension_session = {
+                    "tool": active_tool,
+                    "step": 1,
+                    "anchors": list(anchors),
+                    "source_object": clicked_object,
+                }
+                self.start_pos = self.map_from_scene(click_scene_pos)
+                self.current_pos = self.start_pos
+                self._set_dimension_hint(active_tool)
+                self.update()
+                return True
+            placement_point = Point(click_scene_pos.x(), click_scene_pos.y())
+            click_anchor = DimensionAnchor(mode="fixed", cached_point=placement_point.copy())
+            dim_class = RadialDimension if active_tool == "radial_dimension" else DiameterDimension
+            dim = dim_class(self.dimension_session["anchors"][0], self.dimension_session["anchors"][1])
+            dim.dimension_line_anchor = click_anchor
+            dim.recompute(self.scene)
+            self.scene.add_object(dim)
+            self.start_pos = None
+            self.current_pos = None
+            self.line_info_changed.emit("")
+            self._reset_dimension_session()
+            self._set_dimension_hint(active_tool)
+            return True
+
+        if active_tool == "angular_dimension":
+            clicked_object = self._get_object_at_cursor(event.position(), include_dimensions=False)
+            _, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
+            if not self.dimension_session:
+                if isinstance(clicked_object, Line):
+                    self.dimension_session = {"tool": active_tool, "step": 1, "mode": "lines", "line1": clicked_object}
+                else:
+                    self.dimension_session = {"tool": active_tool, "step": 1, "mode": "points", "anchors": [click_anchor]}
+                self.start_pos = self.map_from_scene(click_scene_pos)
+                self.current_pos = self.start_pos
+                self._set_dimension_hint(active_tool)
+                self.update()
+                return True
+            if self.dimension_session.get("mode") == "lines" and self.dimension_session["step"] == 1:
+                if isinstance(clicked_object, Line) and clicked_object is not self.dimension_session["line1"]:
+                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(self.dimension_session["line1"], clicked_object)
+                    if vertex is not None:
+                        self.dimension_session = {"tool": active_tool, "step": 3, "mode": "lines", "anchors": [vertex, sel1, sel2]}
+                        self.start_pos = self.map_from_scene(click_scene_pos)
+                        self.current_pos = self.start_pos
+                        self._set_dimension_hint(active_tool)
+                        self.update()
+                return True
+            anchors = self.dimension_session.setdefault("anchors", [])
+            if self.dimension_session.get("mode") == "points" and len(anchors) < 3:
+                anchors.append(click_anchor)
+                self.dimension_session["step"] = len(anchors)
+                self.start_pos = self.map_from_scene(click_scene_pos)
+                self.current_pos = self.start_pos
+                self._set_dimension_hint(active_tool)
+                self.update()
+                return True
+            dim = AngularDimension(anchors[0], anchors[1], anchors[2])
+            dim.dimension_line_anchor = click_anchor
+            dim.recompute(self.scene)
+            self.scene.add_object(dim)
+            self.start_pos = None
+            self.current_pos = None
+            self.line_info_changed.emit("")
+            self._reset_dimension_session()
+            self._set_dimension_hint(active_tool)
+            return True
+
+        return False
+
+    def _build_angular_selectors_from_lines(self, line1: Line, line2: Line):
+        candidates = [
+            ("start", line1.start, "start", line2.start),
+            ("start", line1.start, "end", line2.end),
+            ("end", line1.end, "start", line2.start),
+            ("end", line1.end, "end", line2.end),
+        ]
+        for selector1, point1, selector2, point2 in candidates:
+            if point1.distance_to(point2) <= 1e-6:
+                vertex = DimensionAnchor(mode="object_snap", object_id=line1.object_id, selector=selector1, cached_point=point1.copy())
+                ray1 = DimensionAnchor(mode="object_snap", object_id=line1.object_id, selector="end" if selector1 == "start" else "start", cached_point=(line1.end if selector1 == "start" else line1.start).copy())
+                ray2 = DimensionAnchor(mode="object_snap", object_id=line2.object_id, selector="end" if selector2 == "start" else "start", cached_point=(line2.end if selector2 == "start" else line2.start).copy())
+                return vertex, ray1, ray2
+        return None, None, None
+
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
         # Получаем настройки с "защитой" от их отсутствия
@@ -226,6 +518,8 @@ class CanvasWidget(QWidget):
         # Обновляем информацию о линии при изменении настроек (например, единиц углов)
         if self.start_pos and self.current_pos:
             self._update_line_info()
+
+        self.scene.recompute_dimensions()
         
         self.update() # Запросить полную перерисовку
     
@@ -545,6 +839,10 @@ class CanvasWidget(QWidget):
                 click_scene_pos = QPointF(self.current_snap_point.x, self.current_snap_point.y)
             else:
                 click_scene_pos = self.map_to_scene(event.position())
+
+            if self._is_dimension_tool(active_tool):
+                if self._handle_dimension_left_click(active_tool, event, click_scene_pos):
+                    return
             
             if self.start_pos is None:
                 # Первый клик - начало построения
@@ -572,6 +870,40 @@ class CanvasWidget(QWidget):
                         # Для center_angles: первая точка = центр
                         self._arc_center = Point(click_scene_pos.x(), click_scene_pos.y())
                         self.construction_points = []
+                elif active_tool in {'radial_dimension', 'diameter_dimension'}:
+                    clicked_object = self._get_object_at_cursor(event.position())
+                    if isinstance(clicked_object, Circle):
+                        center_anchor = DimensionAnchor(
+                            mode="object_snap",
+                            object_id=clicked_object.object_id,
+                            selector="center",
+                            cached_point=clicked_object.center.copy(),
+                        )
+                        curve_anchor = DimensionAnchor(
+                            mode="object_snap",
+                            object_id=clicked_object.object_id,
+                            selector="radius_point",
+                            cached_point=Point(clicked_object.center.x + clicked_object.radius, clicked_object.center.y),
+                        )
+                        self.construction_points = [center_anchor, curve_anchor]
+                    elif active_tool == 'radial_dimension' and isinstance(clicked_object, Arc):
+                        center_anchor = DimensionAnchor(
+                            mode="object_snap",
+                            object_id=clicked_object.object_id,
+                            selector="center",
+                            cached_point=clicked_object.center.copy(),
+                        )
+                        curve_anchor = DimensionAnchor(
+                            mode="object_snap",
+                            object_id=clicked_object.object_id,
+                            selector="arc_mid",
+                            cached_point=clicked_object.mid_point.copy(),
+                        )
+                        self.construction_points = [center_anchor, curve_anchor]
+                elif active_tool == 'angular_dimension':
+                    clicked_object = self._get_object_at_cursor(event.position())
+                    if isinstance(clicked_object, Line):
+                        self.construction_points = [clicked_object]
                 
                 self._update_line_info()
             else:
@@ -822,6 +1154,69 @@ class CanvasWidget(QWidget):
                     self.start_pos = event.position()  # Обновляем для preview
                     self.update()
                     return  # Не сбрасываем start_pos
+
+                elif active_tool == 'linear_dimension':
+                    click_point, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
+                    start_point = Point(start_scene_pos.x(), start_scene_pos.y())
+                    start_anchor = self._make_anchor_from_snap(self.current_snap_point) if self.current_snap_point else DimensionAnchor(mode="fixed", cached_point=start_point.copy())
+                    mode = "aligned"
+                    if self.dimension_input_panel:
+                        mode = self.dimension_input_panel.get_linear_mode()
+
+                    if not self.construction_points:
+                        self.construction_points = [start_anchor, click_anchor]
+                        self.start_pos = event.position()
+                        self.current_pos = event.position()
+                        self.update()
+                        return
+                    else:
+                        anchor1, anchor2 = self.construction_points[0], self.construction_points[1]
+                        dim = LinearDimension(anchor1, anchor2, mode=mode)
+                        dim.dimension_line_anchor = click_anchor
+                        dim.recompute(self.scene)
+                        self.scene.add_object(dim)
+                        self.construction_points = []
+
+                elif active_tool in {'radial_dimension', 'diameter_dimension'}:
+                    clicked_point, clicked_anchor = self._point_from_scene_or_snap(click_scene_pos)
+                    if len(self.construction_points) >= 2:
+                        mode = "radius" if active_tool == 'radial_dimension' else "diameter"
+                        dim = RadialDimension(self.construction_points[0], self.construction_points[1], mode=mode)
+                        dim.dimension_line_anchor = clicked_anchor
+                        dim.recompute(self.scene)
+                        self.scene.add_object(dim)
+                    self.construction_points = []
+
+                elif active_tool == 'angular_dimension':
+                    click_point, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
+                    clicked_object = self._get_object_at_cursor(event.position())
+                    if self.construction_points and isinstance(self.construction_points[0], Line) and isinstance(clicked_object, Line) and clicked_object is not self.construction_points[0]:
+                        vertex, sel1, sel2 = self._build_angular_selectors_from_lines(self.construction_points[0], clicked_object)
+                        if vertex is not None:
+                            self.construction_points = [vertex, sel1, sel2]
+                            self.start_pos = event.position()
+                            self.current_pos = event.position()
+                            self.update()
+                            return
+                    if not self.construction_points:
+                        start_point, start_anchor = self._point_from_scene_or_snap(start_scene_pos)
+                        self.construction_points = [start_anchor, click_anchor]
+                        self.start_pos = event.position()
+                        self.current_pos = event.position()
+                        self.update()
+                        return
+                    elif len(self.construction_points) == 2:
+                        self.construction_points.append(click_anchor)
+                        self.start_pos = event.position()
+                        self.current_pos = event.position()
+                        self.update()
+                        return
+                    else:
+                        dim = AngularDimension(self.construction_points[0], self.construction_points[1], self.construction_points[2])
+                        dim.dimension_line_anchor = clicked_anchor
+                        dim.recompute(self.scene)
+                        self.scene.add_object(dim)
+                        self.construction_points = []
                 
                 # Сбрасываем состояние построения
                 self.start_pos = None
@@ -839,6 +1234,7 @@ class CanvasWidget(QWidget):
             self.start_pos = None
             self.current_pos = None
             self.construction_points = []  # Сбрасываем накопленные точки
+            self._reset_dimension_session()
             self.line_info_changed.emit("")
             if hasattr(self, '_spline_points'):
                 self._spline_points = []
@@ -934,6 +1330,7 @@ class CanvasWidget(QWidget):
                  target_y = new_scene_pos.y()
              
              if self.dragging_object.move_control_point(self.dragging_point_index, target_x, target_y):
+                 self.scene.recompute_dimensions()
                  self.scene.scene_changed.emit()
                  # Обновляем панель свойств, чтобы значения в спинбоксах обновились
                  self.selection_changed.emit(self.selected_objects)
@@ -1048,6 +1445,7 @@ class CanvasWidget(QWidget):
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_scene_objects(painter)
+        self._draw_dimensions(painter)
         self._draw_selection(painter) # выделение объектов
         self._draw_hover_highlighted_line(painter)  # Рисуем hover подсветку (голубая)
         self._draw_highlighted_line(painter)  # Рисуем delete подсветку (красная)
@@ -1168,6 +1566,8 @@ class CanvasWidget(QWidget):
         base_width = style_manager.base_width
 
         for obj in self.scene.objects:
+            if isinstance(obj, DimensionBase):
+                continue
             # Пропускаем объекты для специальной отрисовки
             if obj == self.hover_highlighted_line:
                 continue
@@ -1212,6 +1612,128 @@ class CanvasWidget(QWidget):
                 self._draw_polygon(painter, obj, pen)
             elif isinstance(obj, Spline):
                 self._draw_spline(painter, obj, pen)
+
+    def _draw_dimensions(self, painter: QPainter):
+        default_color_hex = (settings.get("colors") or settings.defaults["colors"]).get("line_object", "#DDFFFFFF")
+
+        for obj in self.scene.objects:
+            if not isinstance(obj, DimensionBase):
+                continue
+            layer = self.scene.layers.get(getattr(obj, "layer_name", "0"))
+            color = QColor(resolve_object_color_hex(obj, layer, default_color_hex))
+            self._draw_dimension_object(painter, obj, color)
+
+    def _draw_dimension_object(self, painter: QPainter, obj: DimensionBase, color: QColor):
+        data = obj.get_render_data()
+        if not data:
+            return
+        dimension_pen = self._make_dimension_pen(color, obj.dimension_style.get("dimension_line_style_name", "Сплошная тонкая"))
+        extension_pen = self._make_dimension_pen(color, obj.dimension_style.get("extension_line_style_name", "Сплошная тонкая"))
+
+        for start, end in data.get("extension_lines", []):
+            painter.setPen(extension_pen)
+            painter.drawLine(self.map_from_scene(QPointF(start.x, start.y)), self.map_from_scene(QPointF(end.x, end.y)))
+        for start, end in data.get("segments", []):
+            painter.setPen(dimension_pen)
+            painter.drawLine(self.map_from_scene(QPointF(start.x, start.y)), self.map_from_scene(QPointF(end.x, end.y)))
+
+        if "arc" in data:
+            arc = data["arc"]
+            self._draw_dimension_arc(painter, arc, dimension_pen)
+
+        for arrow in data.get("arrows", []):
+            self._draw_dimension_arrow(painter, arrow["tip"], arrow["tail"], obj, color)
+
+        self._draw_dimension_text(painter, obj, data, color)
+
+    def _make_dimension_pen(self, color: QColor, style_name: str) -> QPen:
+        style = style_manager.get_style(style_name)
+        pen = QPen(color)
+        pen_width = style_manager.base_width * style.width_mult
+        pen.setWidthF(pen_width)
+        pen.setCosmetic(True)
+        if style.pattern:
+            pen.setStyle(Qt.PenStyle.CustomDashLine)
+            pen.setDashPattern(style.pattern)
+        else:
+            pen.setStyle(Qt.PenStyle.SolidLine)
+        return pen
+
+    def _draw_dimension_arc(self, painter: QPainter, arc_data: dict, pen: QPen):
+        center = arc_data["center"]
+        radius = arc_data["radius"]
+        center_screen = self.map_from_scene(QPointF(center.x, center.y))
+        radius_screen = radius * self.zoom_factor
+        rect = QRectF(center_screen.x() - radius_screen, center_screen.y() - radius_screen, radius_screen * 2, radius_screen * 2)
+        painter.setPen(pen)
+        painter.drawArc(rect, int(arc_data["start_angle_deg"] * 16), int(arc_data["span_angle_deg"] * 16))
+
+    def _draw_dimension_arrow(self, painter: QPainter, tip_scene: Point, tail_scene: Point, obj: DimensionBase, color: QColor):
+        tip = self.map_from_scene(QPointF(tip_scene.x, tip_scene.y))
+        tail = self.map_from_scene(QPointF(tail_scene.x, tail_scene.y))
+        dx = tail.x() - tip.x()
+        dy = tail.y() - tip.y()
+        length = math.hypot(dx, dy)
+        if length <= 1e-6:
+            return
+        ux, uy = dx / length, dy / length
+        from .core.geometry.dimensions import global_dimension_arrow_size_mm
+        arrow_size = self._mm_to_pixels(global_dimension_arrow_size_mm())
+        back_x = tip.x() + ux * arrow_size
+        back_y = tip.y() + uy * arrow_size
+        nx, ny = -uy, ux
+        wing = arrow_size * 0.35
+        left = QPointF(back_x + nx * wing, back_y + ny * wing)
+        right = QPointF(back_x - nx * wing, back_y - ny * wing)
+        path = QPainterPath()
+        path.moveTo(tip)
+        path.lineTo(left)
+        if obj.dimension_style.get("arrow_type", "closed_filled") != "open":
+            path.lineTo(right)
+            path.closeSubpath()
+        painter.save()
+        pen = QPen(color)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        arrow_type = obj.dimension_style.get("arrow_type", "closed_filled")
+        if arrow_type == "open":
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(tip, left)
+            painter.drawLine(tip, right)
+        else:
+            fill_enabled = arrow_type == "closed_filled"
+            painter.setBrush(color if fill_enabled else Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+        painter.restore()
+
+    def _draw_dimension_text(self, painter: QPainter, obj: DimensionBase, data: dict, color: QColor):
+        text_position = data.get("text_position")
+        if text_position is None:
+            return
+        painter.save()
+        font = painter.font()
+        from .core.geometry.dimensions import global_dimension_font_spec, global_dimension_text_height_mm
+        pixel_size = max(8, int(round(self._mm_to_pixels(global_dimension_text_height_mm()))))
+        family, italic = global_dimension_font_spec()
+        font.setFamily(family)
+        font.setItalic(italic)
+        font.setPixelSize(pixel_size)
+        painter.setFont(font)
+        painter.setPen(QPen(color))
+        screen = self.map_from_scene(QPointF(text_position.x, text_position.y))
+        angle = self._normalize_dimension_text_angle(data.get("text_angle", 0.0) - self.rotation_angle)
+        metrics = painter.fontMetrics()
+        text = data.get("text", "")
+        rect = metrics.boundingRect(text)
+        painter.translate(screen)
+        painter.rotate(-angle)
+        painter.drawText(QPointF(-rect.width() / 2, rect.height() / 3), text)
+        painter.restore()
+
+    def _mm_to_pixels(self, value_mm: float) -> float:
+        screen = QApplication.primaryScreen()
+        dpi = screen.logicalDotsPerInch() if screen else 96.0
+        return max(1.0, value_mm * (dpi / 25.4))
     
     def _draw_line(self, painter: QPainter, obj: Line, pen: QPen, pen_width: float):
         """Отрисовывает отрезок."""
@@ -1390,6 +1912,8 @@ class CanvasWidget(QWidget):
         
         for obj in self.selected_objects:
             # Рисуем контур объекта пунктиром
+            if isinstance(obj, DimensionBase):
+                self._draw_dimension_object(painter, obj, QColor("#FFA500"))
             if isinstance(obj, PointEntity):
                 pos = self.map_from_scene(QPointF(obj.position.x, obj.position.y))
                 painter.drawRect(QRectF(pos.x() - 4, pos.y() - 4, 8, 8))
@@ -1815,6 +2339,54 @@ class CanvasWidget(QWidget):
                 last_pt = self._spline_points[-1]
                 last_screen = self.map_from_scene(QPointF(last_pt.x, last_pt.y))
                 painter.drawLine(last_screen.toPoint(), self.current_pos.toPoint())
+
+        elif active_tool == 'linear_dimension':
+            mode = self.dimension_input_panel.get_linear_mode() if self.dimension_input_panel else "aligned"
+            session = self.dimension_session or {}
+            anchors = session.get("anchors", [])
+            if len(anchors) < 2:
+                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+            else:
+                _, click_anchor = self._dimension_preview_point(current_scene_pos)
+                temp = LinearDimension(anchors[0], anchors[1], mode=mode)
+                temp.dimension_line_anchor = click_anchor
+                temp.recompute(self.scene)
+                self._draw_dimension_object(painter, temp, QColor("#7A86CC"))
+
+        elif active_tool in {'radial_dimension', 'diameter_dimension'}:
+            session = self.dimension_session or {}
+            anchors = session.get("anchors", [])
+            if len(anchors) >= 2:
+                _, click_anchor = self._dimension_preview_point(current_scene_pos)
+                dim_class = RadialDimension if active_tool == 'radial_dimension' else DiameterDimension
+                temp = dim_class(anchors[0], anchors[1])
+                temp.dimension_line_anchor = click_anchor
+                temp.recompute(self.scene)
+                self._draw_dimension_object(painter, temp, QColor("#7A86CC"))
+
+        elif active_tool == 'angular_dimension':
+            _, click_anchor = self._dimension_preview_point(current_scene_pos)
+            session = self.dimension_session or {}
+            if session.get("mode") == "lines" and session.get("line1") is not None:
+                line = session["line1"]
+                painter.drawLine(self.map_from_scene(QPointF(line.start.x, line.start.y)), self.map_from_scene(QPointF(line.end.x, line.end.y)))
+            else:
+                anchors = session.get("anchors", [])
+                if len(anchors) == 1:
+                    p1 = anchors[0].cached_point
+                    if p1:
+                        painter.drawLine(self.map_from_scene(QPointF(p1.x, p1.y)), self.current_pos.toPoint())
+                elif len(anchors) == 2:
+                    vertex = anchors[0].cached_point
+                    side1 = anchors[1].cached_point
+                    if vertex and side1:
+                        painter.drawLine(self.map_from_scene(QPointF(vertex.x, vertex.y)), self.map_from_scene(QPointF(side1.x, side1.y)))
+                        painter.drawLine(self.map_from_scene(QPointF(vertex.x, vertex.y)), self.current_pos.toPoint())
+                elif len(anchors) >= 3:
+                    temp = AngularDimension(anchors[0], anchors[1], anchors[2])
+                    temp.dimension_line_anchor = click_anchor
+                    temp.recompute(self.scene)
+                    self._draw_dimension_object(painter, temp, QColor("#7A86CC"))
     
     def _calculate_end_point_polar(self, start_scene: QPointF, cursor_scene: QPointF) -> QPointF:
         """
@@ -2101,13 +2673,16 @@ class CanvasWidget(QWidget):
         max_y = float('-inf')
         
         for obj in self.scene.objects:
-            if isinstance(obj, Line):
-                # Для линии проверяем обе точки
-                min_x = min(min_x, obj.start.x, obj.end.x)
-                min_y = min(min_y, obj.start.y, obj.end.y)
-                max_x = max(max_x, obj.start.x, obj.end.x)
-                max_y = max(max_y, obj.start.y, obj.end.y)
-            # TODO: Добавить обработку других типов объектов (круги, дуги)
+            if isinstance(obj, DimensionBase):
+                obj.recompute(self.scene)
+            bounds = obj.get_bounding_box()
+            if not bounds:
+                continue
+            obj_min_x, obj_min_y, obj_max_x, obj_max_y = bounds
+            min_x = min(min_x, obj_min_x)
+            min_y = min(min_y, obj_min_y)
+            max_x = max(max_x, obj_max_x)
+            max_y = max(max_y, obj_max_y)
         
         return (QPointF(min_x, min_y), QPointF(max_x, max_y))
     
@@ -2308,7 +2883,7 @@ class CanvasWidget(QWidget):
             self.hover_highlighted_line = None
             self.update()
     
-    def _get_object_at_cursor(self, cursor_pos: QPointF) -> object | None:
+    def _get_object_at_cursor(self, cursor_pos: QPointF, include_dimensions: bool = True) -> object | None:
         """
         Определяет, есть ли объект под курсором.
         
@@ -2328,6 +2903,8 @@ class CanvasWidget(QWidget):
         min_distance = tolerance
         
         for obj in self.scene.objects:
+            if not include_dimensions and isinstance(obj, DimensionBase):
+                continue
             # Используем унифицированный метод distance_to_point из GeometricPrimitive
             distance = obj.distance_to_point(scene_cursor_pos.x(), scene_cursor_pos.y())
             
@@ -2354,6 +2931,7 @@ class CanvasWidget(QWidget):
         if self.start_pos:
             start_scene_pos = self.map_to_scene(self.start_pos)
             reference_point = Point(start_scene_pos.x(), start_scene_pos.y())
+        include_dimensions = not self._is_dimension_tool()
         
         snap_point = snap_manager.find_snap(
             scene_pos.x(), scene_pos.y(),
@@ -2361,7 +2939,8 @@ class CanvasWidget(QWidget):
             tolerance,
             reference_point=reference_point,
             grid_size=settings.get("grid_step") or settings.defaults["grid_step"],
-            zoom_factor=self.zoom_factor
+            zoom_factor=self.zoom_factor,
+            include_dimensions=include_dimensions,
         )
         
         # Обновляем только если изменилось

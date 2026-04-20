@@ -12,7 +12,7 @@ from PySide6.QtGui import QAction
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from cad_app.core.scene import Scene
-from cad_app.core.geometry import Point, Line
+from cad_app.core.geometry import Point, Line, Circle, LinearDimension, DimensionAnchor
 from cad_app.canvas_widget import CanvasWidget
 
 # Создаем QApplication один раз для всех тестов
@@ -243,6 +243,31 @@ def test_zoom_to_fit_with_rotation_180():
     print(f"✓ test_zoom_to_fit_with_rotation_180 passed (zoom={zoom_180:.2f})")
 
 
+def test_calculate_scene_bounds_include_dimensions():
+    """Размерный текст и вынос должны учитываться в bounds."""
+    scene = Scene()
+    line_action = QAction()
+    delete_action = QAction()
+    canvas = CanvasWidget(scene, line_action, delete_action)
+
+    circle = Circle(Point(0, 0), 5)
+    scene.add_object(circle)
+    dim = LinearDimension(
+        DimensionAnchor(mode="fixed", cached_point=Point(-5, 0)),
+        DimensionAnchor(mode="fixed", cached_point=Point(5, 0)),
+        mode="horizontal",
+    )
+    dim.dimension_line_anchor = DimensionAnchor(mode="fixed", cached_point=Point(0, 15))
+    dim.text_position_override = Point(0, 22)
+    scene.add_object(dim)
+
+    bounds = canvas._calculate_scene_bounds()
+    assert bounds is not None
+    min_point, max_point = bounds
+    assert max_point.y() >= 22
+    print("✓ test_calculate_scene_bounds_include_dimensions passed")
+
+
 def test_zoom_to_fit_with_rotation_270():
     """Тест zoom to fit с поворотом 270°."""
     scene = Scene()
@@ -361,6 +386,7 @@ if __name__ == "__main__":
     test_zoom_to_fit_with_rotation_0()
     test_zoom_to_fit_with_rotation_90()
     test_zoom_to_fit_with_rotation_180()
+    test_calculate_scene_bounds_include_dimensions()
     test_zoom_to_fit_with_rotation_270()
     test_zoom_to_fit_rotation_consistency()
     test_zoom_to_fit_rotation_effective_dimensions()

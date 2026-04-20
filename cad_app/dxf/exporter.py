@@ -8,7 +8,7 @@ import math
 from types import SimpleNamespace
 from pathlib import Path
 
-from ..core.geometry import Arc, Circle, Ellipse, Line, PointEntity, Polygon, Rectangle, Spline
+from ..core.geometry import Arc, Circle, Ellipse, Line, PointEntity, Polygon, Rectangle, Spline, DimensionBase
 from ..core.layers import LayerRecord, default_layer
 from .mapping import DEFAULT_DXF_VERSION, apply_common_entity_attributes, map_style_to_linetype
 
@@ -51,6 +51,12 @@ def export_dxf_file(scene, file_path: str | Path, version: str = DEFAULT_DXF_VER
 
 def _export_object(doc, msp, obj, scene, report: dict) -> int:
     layer = scene.layers.get(getattr(obj, "layer_name", "0"), default_layer())
+
+    if isinstance(obj, DimensionBase):
+        report["warnings"].append(
+            f"Размерный объект {type(obj).__name__} пропущен при DXF-экспорте: DXF DIMENSION вне области поддержки"
+        )
+        return 0
 
     if isinstance(obj, PointEntity):
         entity = msp.add_point((obj.position.x, obj.position.y, 0.0))
