@@ -94,6 +94,13 @@ class CanvasWidget(QWidget):
         self.start_pos = None
         self.start_scene_point = None  # Точная сценовая координата начала построения (Point)
         self.current_pos = None
+        
+        # Tangent constraint для Line
+        self._tc_active = False           # Constraint активен
+        self._tc_object = None            # Circle/Arc/Ellipse к которому привязаны
+        self._tc_point = None             # Point — точка касания
+        self._tc_direction = None         # Point — единичный вектор направления
+        self._tc_was_on_object = False    # Был ли курсор на объекте (для toggle)
         self.pan_start_pos = None
         self.camera_pos = QPointF(0, 0)
         self.camera_pos = QPointF(0, 0)
@@ -227,6 +234,7 @@ class CanvasWidget(QWidget):
         self._spline_points = []
         self.start_pos = None
         self.start_scene_point = None
+        self._reset_tangent_constraint()
         self.current_pos = None
         
         # Обновляем панель
@@ -412,6 +420,7 @@ class CanvasWidget(QWidget):
             self.scene.add_object(dim)
             self.start_pos = None
             self.start_scene_point = None
+            self._reset_tangent_constraint()
             self.current_pos = None
             self.line_info_changed.emit("")
             self._reset_dimension_session()
@@ -444,6 +453,7 @@ class CanvasWidget(QWidget):
             self.scene.add_object(dim)
             self.start_pos = None
             self.start_scene_point = None
+            self._reset_tangent_constraint()
             self.current_pos = None
             self.line_info_changed.emit("")
             self._reset_dimension_session()
@@ -488,6 +498,7 @@ class CanvasWidget(QWidget):
             self.scene.add_object(dim)
             self.start_pos = None
             self.start_scene_point = None
+            self._reset_tangent_constraint()
             self.current_pos = None
             self.line_info_changed.emit("")
             self._reset_dimension_session()
@@ -619,6 +630,7 @@ class CanvasWidget(QWidget):
         if event.key() == Qt.Key.Key_Escape and self.start_pos:
             self.start_pos = None
             self.start_scene_point = None
+            self._reset_tangent_constraint()
             self.current_pos = None
             self.update()
             event.accept()
@@ -918,7 +930,15 @@ class CanvasWidget(QWidget):
                 
                 if active_tool == 'line':
                     # Линия: от start до end
-                    if self._current_construction_mode == "polar":
+                    if self._tc_active and self._tc_direction:
+                        # Tangent constraint — endpoint из проекции на луч
+                        d = self._tc_direction
+                        v_x = click_scene_pos.x() - start_scene_pos.x()
+                        v_y = click_scene_pos.y() - start_scene_pos.y()
+                        t = max(0, v_x * d.x + v_y * d.y)
+                        end_point = Point(start_scene_pos.x() + d.x * t,
+                                          start_scene_pos.y() + d.y * t)
+                    elif self._current_construction_mode == "polar":
                         cursor_pos = self.current_pos if self.current_pos else event.position()
                         current_scene_pos = self.map_to_scene(cursor_pos)
                         end_point_qpoint = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
@@ -1227,6 +1247,7 @@ class CanvasWidget(QWidget):
                 # Сбрасываем состояние построения
                 self.start_pos = None
                 self.start_scene_point = None
+                self._reset_tangent_constraint()
                 self.current_pos = None
                 self.line_info_changed.emit("")
         
@@ -1240,6 +1261,7 @@ class CanvasWidget(QWidget):
             
             self.start_pos = None
             self.start_scene_point = None
+            self._reset_tangent_constraint()
             self.current_pos = None
             self.construction_points = []  # Сбрасываем накопленные точки
             self._reset_dimension_session()
@@ -1418,8 +1440,13 @@ class CanvasWidget(QWidget):
         if self.start_pos:
             self.current_pos = event.position()
             
-            # Поиск точки привязки
+            # Поиск точки привязки (должен быть до tangent constraint)
             self._update_snap_point(event.position())
+            
+            # Tangent constraint для Line (использует current_snap_point)
+            active_tool = self.get_active_drawing_tool()
+            if active_tool == 'line' and self.start_scene_point and self._current_construction_mode != "polar":
+                self._handle_tangent_constraint(event.position())
             
             self._update_line_info()  # Обновляем информацию о линии при движении
             self.update()
@@ -2002,7 +2029,27 @@ class CanvasWidget(QWidget):
         current_scene_pos = self.map_to_scene(self.current_pos)
         
         if active_tool == 'line':
-            if self._current_construction_mode == "polar":
+            # Визуальная индикация tangent constraint
+            if self._tc_active and self._tc_point:
+                # Зелёный цвет при активном constraint
+                tc_pen = QPen(QColor("#8BC34A"), 1, Qt.PenStyle.DashLine)
+                tc_pen.setCosmetic(True)
+                painter.setPen(tc_pen)
+                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+                
+                # Маркер точки касания
+                tc_screen = self.map_from_scene(QPointF(self._tc_point.x, self._tc_point.y))
+                marker_pen = QPen(QColor("#8BC34A"), 2)
+                marker_pen.setCosmetic(True)
+                painter.setPen(marker_pen)
+                tx, ty = int(tc_screen.x()), int(tc_screen.y())
+                s = 6
+                painter.drawEllipse(tx - s//2, ty - s//2, s, s)
+                painter.drawLine(tx - s, ty + s//2, tx + s, ty + s//2)
+                
+                # Восстанавливаем перо для остальных превью
+                painter.setPen(pen)
+            elif self._current_construction_mode == "polar":
                 end_point = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
                 end_screen = self.map_from_scene(end_point)
                 painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
@@ -2891,6 +2938,66 @@ class CanvasWidget(QWidget):
             self.hover_highlighted_line = None
             self.update()
     
+    # ==================== Tangent Constraint ====================
+    
+    def _reset_tangent_constraint(self):
+        """Сбрасывает состояние tangent constraint."""
+        self._tc_active = False
+        self._tc_object = None
+        self._tc_point = None
+        self._tc_direction = None
+        self._tc_was_on_object = False
+
+    def _handle_tangent_constraint(self, screen_pos: QPointF):
+        """
+        Обрабатывает tangent constraint при построении линии.
+        
+        Активация: когда snap-система нашла TANGENT (появился маркер привязки).
+        Деактивация: повторное наведение курсора на привязанный объект (toggle).
+        При активном constraint — проецирует current_pos на луч касательной.
+        """
+        scene_pos = self.map_to_scene(screen_pos)
+        
+        if not self._tc_active:
+            # АКТИВАЦИЯ: только когда snap-система нашла TANGENT
+            if (self.current_snap_point and 
+                self.current_snap_point.snap_type == SnapType.TANGENT and
+                self.start_scene_point):
+                sp = self.current_snap_point
+                dx = sp.x - self.start_scene_point.x
+                dy = sp.y - self.start_scene_point.y
+                length = math.sqrt(dx * dx + dy * dy)
+                if length > 1e-9:
+                    self._tc_active = True
+                    self._tc_object = sp.source_object
+                    self._tc_point = Point(sp.x, sp.y)
+                    self._tc_direction = Point(dx / length, dy / length)
+                    self._tc_was_on_object = True  # Предотвращаем мгновенную деактивацию
+        else:
+            # ДЕАКТИВАЦИЯ: курсор вернулся на привязанный объект (toggle)
+            if self._tc_object:
+                tolerance = self.selection_threshold / self.zoom_factor
+                raw_dist = self._tc_object.distance_to_point(scene_pos.x(), scene_pos.y())
+                on_object = raw_dist < tolerance
+                
+                if on_object and not self._tc_was_on_object:
+                    # Курсор только что вернулся на объект → деактивация
+                    self._reset_tangent_constraint()
+                    return
+                
+                self._tc_was_on_object = on_object
+            
+            # Проекция курсора на луч касательной
+            if self._tc_active and self._tc_direction:
+                d = self._tc_direction
+                start = self.start_scene_point
+                v_x = scene_pos.x() - start.x
+                v_y = scene_pos.y() - start.y
+                t = max(0, v_x * d.x + v_y * d.y)
+                proj_x = start.x + d.x * t
+                proj_y = start.y + d.y * t
+                self.current_pos = self.map_from_scene(QPointF(proj_x, proj_y))
+
     def _get_object_at_cursor(self, cursor_pos: QPointF, include_dimensions: bool = True) -> object | None:
         """
         Определяет, есть ли объект под курсором.
