@@ -463,8 +463,12 @@ class CanvasWidget(QWidget):
         if active_tool == "angular_dimension":
             clicked_object = self._get_object_at_cursor(event.position(), include_dimensions=False)
             _, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
+            has_model_snap = (
+                self.current_snap_point is not None
+                and not isinstance(getattr(self.current_snap_point, "source_object", None), DimensionBase)
+            )
             if not self.dimension_session:
-                if isinstance(clicked_object, Line):
+                if isinstance(clicked_object, Line) and not has_model_snap:
                     self.dimension_session = {"tool": active_tool, "step": 1, "mode": "lines", "line1": clicked_object}
                 else:
                     self.dimension_session = {"tool": active_tool, "step": 1, "mode": "points", "anchors": [click_anchor]}
@@ -475,9 +479,16 @@ class CanvasWidget(QWidget):
                 return True
             if self.dimension_session.get("mode") == "lines" and self.dimension_session["step"] == 1:
                 if isinstance(clicked_object, Line) and clicked_object is not self.dimension_session["line1"]:
-                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(self.dimension_session["line1"], clicked_object)
+                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(self.dimension_session["line1"], clicked_object, Point(click_scene_pos.x(), click_scene_pos.y()))
                     if vertex is not None:
-                        self.dimension_session = {"tool": active_tool, "step": 3, "mode": "lines", "anchors": [vertex, sel1, sel2]}
+                        self.dimension_session = {
+                            "tool": active_tool,
+                            "step": 3,
+                            "mode": "lines",
+                            "line1": self.dimension_session["line1"],
+                            "line2": clicked_object,
+                            "anchors": [vertex, sel1, sel2],
+                        }
                         self.start_pos = self.map_from_scene(click_scene_pos)
                         self.current_pos = self.start_pos
                         self._set_dimension_hint(active_tool)
@@ -492,6 +503,15 @@ class CanvasWidget(QWidget):
                 self._set_dimension_hint(active_tool)
                 self.update()
                 return True
+            if self.dimension_session.get("mode") == "lines" and self.dimension_session.get("line1") and self.dimension_session.get("line2"):
+                placement = Point(click_scene_pos.x(), click_scene_pos.y())
+                vertex, sel1, sel2 = self._build_angular_selectors_from_lines(
+                    self.dimension_session["line1"],
+                    self.dimension_session["line2"],
+                    placement,
+                )
+                if vertex is not None:
+                    anchors = [vertex, sel1, sel2]
             dim = AngularDimension(anchors[0], anchors[1], anchors[2])
             dim.dimension_line_anchor = click_anchor
             dim.recompute(self.scene)
@@ -507,7 +527,7 @@ class CanvasWidget(QWidget):
 
         return False
 
-    def _build_angular_selectors_from_lines(self, line1: Line, line2: Line):
+    def _build_angular_selectors_from_lines(self, line1: Line, line2: Line, placement: Point | None = None):
         candidates = [
             ("start", line1.start, "start", line2.start),
             ("start", line1.start, "end", line2.end),
@@ -520,7 +540,98 @@ class CanvasWidget(QWidget):
                 ray1 = DimensionAnchor(mode="object_snap", object_id=line1.object_id, selector="end" if selector1 == "start" else "start", cached_point=(line1.end if selector1 == "start" else line1.start).copy())
                 ray2 = DimensionAnchor(mode="object_snap", object_id=line2.object_id, selector="end" if selector2 == "start" else "start", cached_point=(line2.end if selector2 == "start" else line2.start).copy())
                 return vertex, ray1, ray2
-        return None, None, None
+
+        intersection = self._line_intersection_point(line1, line2)
+        if intersection is None:
+            return None, None, None
+
+        dir1 = self._line_unit_direction(line1)
+        dir2 = self._line_unit_direction(line2)
+        if dir1 is None or dir2 is None:
+            return None, None, None
+        ray1_dir, ray2_dir = self._choose_angular_ray_directions(dir1, dir2, intersection, placement)
+        ray1_point = self._point_on_line_ray(line1, intersection, ray1_dir)
+        ray2_point = self._point_on_line_ray(line2, intersection, ray2_dir)
+        return (
+            DimensionAnchor(mode="fixed", cached_point=intersection.copy()),
+            DimensionAnchor(mode="fixed", cached_point=ray1_point.copy()),
+            DimensionAnchor(mode="fixed", cached_point=ray2_point.copy()),
+        )
+
+    def _line_unit_direction(self, line: Line) -> Point | None:
+        dx = line.end.x - line.start.x
+        dy = line.end.y - line.start.y
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        return Point(dx / length, dy / length)
+
+    def _choose_angular_ray_directions(self, dir1: Point, dir2: Point, vertex: Point, placement: Point | None) -> tuple[Point, Point]:
+        directions1 = [dir1, Point(-dir1.x, -dir1.y)]
+        directions2 = [dir2, Point(-dir2.x, -dir2.y)]
+        if placement is None or placement.distance_to(vertex) <= 1e-9:
+            return directions1[0], directions2[0]
+
+        placement_angle = math.atan2(placement.y - vertex.y, placement.x - vertex.x)
+        best = None
+        for ray1 in directions1:
+            for ray2 in directions2:
+                a1 = math.atan2(ray1.y, ray1.x)
+                a2 = math.atan2(ray2.y, ray2.x)
+                for first, second, start_angle, end_angle in (
+                    (ray1, ray2, a1, a2),
+                    (ray2, ray1, a2, a1),
+                ):
+                    span = self._positive_angle_delta(end_angle - start_angle)
+                    if span > math.pi + 1e-6:
+                        continue
+                    contains = self._angle_between_ccw(placement_angle, start_angle, end_angle)
+                    mid = start_angle + span / 2.0
+                    distance = abs(math.atan2(math.sin(placement_angle - mid), math.cos(placement_angle - mid)))
+                    score = (0 if contains else 1, distance, span)
+                    if best is None or score < best[0]:
+                        best = (score, first, second)
+
+        if best is None:
+            return directions1[0], directions2[0]
+        return best[1], best[2]
+
+    def _point_on_line_ray(self, line: Line, vertex: Point, direction: Point) -> Point:
+        candidates = [line.start, line.end]
+        positive = [
+            (point, (point.x - vertex.x) * direction.x + (point.y - vertex.y) * direction.y)
+            for point in candidates
+        ]
+        positive = [(point, projection) for point, projection in positive if projection > 1e-6]
+        if positive:
+            return max(positive, key=lambda item: item[1])[0].copy()
+        fallback_length = max(vertex.distance_to(line.start), vertex.distance_to(line.end), 10.0)
+        return Point(vertex.x + direction.x * fallback_length, vertex.y + direction.y * fallback_length)
+
+    def _positive_angle_delta(self, angle: float) -> float:
+        while angle < 0:
+            angle += math.tau
+        while angle >= math.tau:
+            angle -= math.tau
+        return angle
+
+    def _angle_between_ccw(self, angle: float, start: float, end: float) -> bool:
+        return self._positive_angle_delta(angle - start) <= self._positive_angle_delta(end - start) + 1e-9
+
+    def _line_intersection_point(self, line1: Line, line2: Line) -> Point | None:
+        x1, y1 = line1.start.x, line1.start.y
+        x2, y2 = line1.end.x, line1.end.y
+        x3, y3 = line2.start.x, line2.start.y
+        x4, y4 = line2.end.x, line2.end.y
+        denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denominator) <= 1e-9:
+            return None
+
+        det1 = x1 * y2 - y1 * x2
+        det2 = x3 * y4 - y3 * x4
+        px = (det1 * (x3 - x4) - (x1 - x2) * det2) / denominator
+        py = (det1 * (y3 - y4) - (y1 - y2) * det2) / denominator
+        return Point(px, py)
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -1789,26 +1900,29 @@ class CanvasWidget(QWidget):
 
         text_center = self.map_from_scene(QPointF(text_position.x, text_position.y))
         gap_px = max(2.0, self._mm_to_pixels(float(obj.dimension_style.get("text_gap_mm", 1.0))))
-        landing_padding_px = max(6.0, gap_px * 2.0)
-        landing_y = text_center.y() + rect.height() / 2.0 + gap_px
-        landing_half_width = rect.width() / 2.0 + landing_padding_px
-        landing_start = QPointF(text_center.x() - landing_half_width, landing_y)
-        landing_end = QPointF(text_center.x() + landing_half_width, landing_y)
+        landing_screen = None
+        leader_screen = None
+        if data.get("has_leader", False):
+            landing_padding_px = max(6.0, gap_px * 2.0)
+            landing_y = text_center.y() + rect.height() / 2.0 + gap_px
+            landing_half_width = rect.width() / 2.0 + landing_padding_px
+            landing_start = QPointF(text_center.x() - landing_half_width, landing_y)
+            landing_end = QPointF(text_center.x() + landing_half_width, landing_y)
 
-        leader_anchor = self._dimension_text_leader_anchor(data)
-        leader_screen_start = self.map_from_scene(QPointF(leader_anchor.x, leader_anchor.y)) if leader_anchor else None
-        if leader_screen_start is not None:
-            leader_screen_end = landing_start if leader_screen_start.x() <= text_center.x() else landing_end
-        else:
-            leader_screen_end = None
+            leader_anchor = self._dimension_text_leader_anchor(data)
+            leader_screen_start = self.map_from_scene(QPointF(leader_anchor.x, leader_anchor.y)) if leader_anchor else None
+            if leader_screen_start is not None:
+                leader_screen_end = landing_start if leader_screen_start.x() <= text_center.x() else landing_end
+                leader_screen = (leader_screen_start, leader_screen_end)
+            landing_screen = (landing_start, landing_end)
 
         render_data.update({
             "font": font,
             "text_rect": rect,
             "text_screen": text_center,
             "text_screen_angle": 0.0,
-            "landing_screen": (landing_start, landing_end),
-            "leader_screen": (leader_screen_start, leader_screen_end) if leader_screen_start and leader_screen_end else None,
+            "landing_screen": landing_screen,
+            "leader_screen": leader_screen,
         })
 
         if data.get("kind") == "linear":
@@ -2538,11 +2652,15 @@ class CanvasWidget(QWidget):
         elif active_tool == 'angular_dimension':
             _, click_anchor = self._dimension_preview_point(current_scene_pos)
             session = self.dimension_session or {}
-            if session.get("mode") == "lines" and session.get("line1") is not None:
+            if session.get("mode") == "lines" and session.get("line1") is not None and session.get("line2") is None:
                 line = session["line1"]
                 painter.drawLine(self.map_from_scene(QPointF(line.start.x, line.start.y)), self.map_from_scene(QPointF(line.end.x, line.end.y)))
             else:
                 anchors = session.get("anchors", [])
+                if session.get("mode") == "lines" and session.get("line1") is not None and session.get("line2") is not None:
+                    placement = Point(current_scene_pos.x(), current_scene_pos.y())
+                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(session["line1"], session["line2"], placement)
+                    anchors = [vertex, sel1, sel2] if vertex is not None else []
                 if len(anchors) == 1:
                     p1 = anchors[0].cached_point
                     if p1:

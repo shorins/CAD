@@ -811,10 +811,21 @@ class AngularDimension(DimensionBase):
         end = Point(vertex.x + math.cos(a2) * radius, vertex.y + math.sin(a2) * radius)
         text_w, text_h = self._estimate_text_size_scene()
         arc_mid = Point(vertex.x + math.cos(mid_angle) * radius, vertex.y + math.sin(mid_angle) * radius)
-        default_text = Point(arc_mid.x, arc_mid.y + text_h + float(self.dimension_style.get("text_gap_mm", 1.0)))
-        text_position = self.text_position_override.copy() if self.text_position_override else default_text
-        leader_points, landing_points = _horizontal_text_landing_layout(arc_mid, text_position, text_w, text_h)
-        has_leader = True
+        radial = Point(math.cos(mid_angle), math.sin(mid_angle))
+        text_gap = float(self.dimension_style.get("text_gap_mm", 1.0))
+        default_text = Point(
+            arc_mid.x + radial.x * (text_h * 0.7 + text_gap),
+            arc_mid.y + radial.y * (text_h * 0.7 + text_gap),
+        )
+        if self.text_position_override:
+            text_position = self.text_position_override.copy()
+            leader_points, landing_points = _horizontal_text_landing_layout(arc_mid, text_position, text_w, text_h)
+            has_leader = True
+        else:
+            text_position = default_text
+            leader_points = []
+            landing_points = []
+            has_leader = False
 
         self.measured_value_cache = math.degrees(span)
         arrow = global_dimension_arrow_size_mm()
@@ -840,8 +851,8 @@ class AngularDimension(DimensionBase):
             "landing_points": landing_points,
             "text_is_outside": has_leader,
             "arrows_are_outside": self.arrows_flipped,
-            "has_leader": True,
-            "fit_result": "outside_text",
+            "has_leader": has_leader,
+            "fit_result": "outside_text" if has_leader else "inside",
         }
         self._update_layout_flags()
 
