@@ -1664,6 +1664,7 @@ class CanvasWidget(QWidget):
             return
         dimension_pen = self._make_dimension_pen(color, obj.dimension_style.get("dimension_line_style_name", "Сплошная тонкая"))
         extension_pen = self._make_dimension_pen(color, obj.dimension_style.get("extension_line_style_name", "Сплошная тонкая"))
+        render_data = self._resolve_dimension_screen_text_layout(painter, obj, data)
 
         for start, end in data.get("extension_lines", []):
             painter.setPen(extension_pen)
@@ -1679,7 +1680,8 @@ class CanvasWidget(QWidget):
         for arrow in data.get("arrows", []):
             self._draw_dimension_arrow(painter, arrow["tip"], arrow["tail"], obj, color)
 
-        self._draw_dimension_text(painter, obj, data, color)
+        self._draw_dimension_screen_landing(painter, render_data, dimension_pen)
+        self._draw_dimension_text(painter, obj, render_data, color)
 
     def _make_dimension_pen(self, color: QColor, style_name: str) -> QPen:
         style = style_manager.get_style(style_name)
@@ -1746,6 +1748,22 @@ class CanvasWidget(QWidget):
         if text_position is None:
             return
         painter.save()
+        painter.setFont(data.get("font", painter.font()))
+        painter.setPen(QPen(color))
+        screen = data.get("text_screen")
+        if screen is None:
+            screen = self.map_from_scene(QPointF(text_position.x, text_position.y))
+        angle = data.get("text_screen_angle")
+        if angle is None:
+            angle = self._normalize_dimension_text_angle(data.get("text_angle", 0.0) - self.rotation_angle)
+        text = data.get("text", "")
+        rect = data.get("text_rect") or painter.fontMetrics().boundingRect(text)
+        painter.translate(screen)
+        painter.rotate(-angle)
+        painter.drawText(QPointF(-rect.width() / 2, rect.height() / 3), text)
+        painter.restore()
+
+    def _dimension_font(self, painter: QPainter):
         font = painter.font()
         from .core.geometry.dimensions import global_dimension_font_spec, global_dimension_text_height_mm
         pixel_size = max(8, int(round(self._mm_to_pixels(global_dimension_text_height_mm()))))
@@ -1753,16 +1771,114 @@ class CanvasWidget(QWidget):
         font.setFamily(family)
         font.setItalic(italic)
         font.setPixelSize(pixel_size)
+        return font
+
+    def _resolve_dimension_screen_text_layout(self, painter: QPainter, obj: DimensionBase, data: dict) -> dict:
+        render_data = dict(data)
+        text_position = data.get("text_position")
+        if text_position is None:
+            return render_data
+
+        font = self._dimension_font(painter)
+        painter.save()
         painter.setFont(font)
-        painter.setPen(QPen(color))
-        screen = self.map_from_scene(QPointF(text_position.x, text_position.y))
-        angle = self._normalize_dimension_text_angle(data.get("text_angle", 0.0) - self.rotation_angle)
         metrics = painter.fontMetrics()
         text = data.get("text", "")
         rect = metrics.boundingRect(text)
-        painter.translate(screen)
-        painter.rotate(-angle)
-        painter.drawText(QPointF(-rect.width() / 2, rect.height() / 3), text)
+        painter.restore()
+
+        text_center = self.map_from_scene(QPointF(text_position.x, text_position.y))
+        gap_px = max(2.0, self._mm_to_pixels(float(obj.dimension_style.get("text_gap_mm", 1.0))))
+        landing_padding_px = max(6.0, gap_px * 2.0)
+        landing_y = text_center.y() + rect.height() / 2.0 + gap_px
+        landing_half_width = rect.width() / 2.0 + landing_padding_px
+        landing_start = QPointF(text_center.x() - landing_half_width, landing_y)
+        landing_end = QPointF(text_center.x() + landing_half_width, landing_y)
+
+        leader_anchor = self._dimension_text_leader_anchor(data)
+        leader_screen_start = self.map_from_scene(QPointF(leader_anchor.x, leader_anchor.y)) if leader_anchor else None
+        if leader_screen_start is not None:
+            leader_screen_end = landing_start if leader_screen_start.x() <= text_center.x() else landing_end
+        else:
+            leader_screen_end = None
+
+        render_data.update({
+            "font": font,
+            "text_rect": rect,
+            "text_screen": text_center,
+            "text_screen_angle": 0.0,
+            "landing_screen": (landing_start, landing_end),
+            "leader_screen": (leader_screen_start, leader_screen_end) if leader_screen_start and leader_screen_end else None,
+        })
+
+        if data.get("kind") == "linear":
+            self._resolve_linear_dimension_screen_text_layout(render_data, data, rect, gap_px)
+        return render_data
+
+    def _resolve_linear_dimension_screen_text_layout(self, render_data: dict, data: dict, rect, gap_px: float):
+        extension_lines = data.get("extension_lines", [])
+        if len(extension_lines) < 2:
+            return
+
+        dim_start = extension_lines[0][1]
+        dim_end = extension_lines[1][1]
+        start_screen = self.map_from_scene(QPointF(dim_start.x, dim_start.y))
+        end_screen = self.map_from_scene(QPointF(dim_end.x, dim_end.y))
+        dx = end_screen.x() - start_screen.x()
+        dy = end_screen.y() - start_screen.y()
+        length = math.hypot(dx, dy)
+        if length <= 1e-6:
+            return
+
+        axis = QPointF(dx / length, dy / length)
+        normal = QPointF(-dy / length, dx / length)
+        midpoint = QPointF((start_screen.x() + end_screen.x()) / 2.0, (start_screen.y() + end_screen.y()) / 2.0)
+        current = render_data.get("text_screen") or midpoint
+        offset_from_mid = QPointF(current.x() - midpoint.x(), current.y() - midpoint.y())
+        side = offset_from_mid.x() * normal.x() + offset_from_mid.y() * normal.y()
+        along = offset_from_mid.x() * axis.x() + offset_from_mid.y() * axis.y()
+        if abs(side) < 1e-6:
+            side = -1.0
+        sign = 1.0 if side >= 0 else -1.0
+        base = QPointF(midpoint.x() + axis.x() * along, midpoint.y() + axis.y() * along)
+        offset = rect.height() / 2.0 + gap_px
+        render_data["text_screen"] = QPointF(
+            base.x() + normal.x() * sign * offset,
+            base.y() + normal.y() * sign * offset,
+        )
+        line_angle = math.degrees(math.atan2(dy, dx))
+        render_data["text_screen_angle"] = self._normalize_dimension_text_angle(-line_angle)
+        render_data["landing_screen"] = None
+        render_data["leader_screen"] = None
+
+    def _dimension_text_leader_anchor(self, data: dict):
+        kind = data.get("kind")
+        if kind == "angular" and "arc" in data:
+            arc = data["arc"]
+            angle = math.radians(arc["start_angle_deg"] + arc["span_angle_deg"] / 2.0)
+            center = arc["center"]
+            radius = arc["radius"]
+            return Point(center.x + math.cos(angle) * radius, center.y + math.sin(angle) * radius)
+        segments = data.get("segments", [])
+        if segments:
+            return segments[0][1]
+        snap_points = data.get("snap_points", [])
+        if snap_points:
+            return snap_points[0]
+        return data.get("text_position")
+
+    def _draw_dimension_screen_landing(self, painter: QPainter, data: dict, pen: QPen):
+        landing = data.get("landing_screen")
+        if not landing:
+            return
+        painter.save()
+        painter.setPen(pen)
+        leader = data.get("leader_screen")
+        if leader:
+            start, end = leader
+            painter.drawLine(start, end)
+        start, end = landing
+        painter.drawLine(start, end)
         painter.restore()
 
     def _mm_to_pixels(self, value_mm: float) -> float:
