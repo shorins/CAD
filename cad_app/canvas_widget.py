@@ -1927,7 +1927,122 @@ class CanvasWidget(QWidget):
 
         if data.get("kind") == "linear":
             self._resolve_linear_dimension_screen_text_layout(render_data, data, rect, gap_px)
+        elif data.get("kind") == "angular" and not data.get("has_leader", False):
+            self._resolve_angular_dimension_screen_text_layout(render_data, data, rect, gap_px)
         return render_data
+
+    def _resolve_angular_dimension_screen_text_layout(self, render_data: dict, data: dict, rect, gap_px: float):
+        arc = data.get("arc")
+        if not arc:
+            return
+
+        center = arc["center"]
+        radius = arc["radius"]
+        start_angle = math.radians(arc["start_angle_deg"])
+        span_angle = math.radians(arc["span_angle_deg"])
+        if radius <= 1e-6 or abs(span_angle) <= 1e-9:
+            return
+
+        mid_angle = start_angle + span_angle / 2.0
+        arc_mid = Point(center.x + math.cos(mid_angle) * radius, center.y + math.sin(mid_angle) * radius)
+        center_screen = self.map_from_scene(QPointF(center.x, center.y))
+        arc_mid_screen = self.map_from_scene(QPointF(arc_mid.x, arc_mid.y))
+        radial = QPointF(arc_mid_screen.x() - center_screen.x(), arc_mid_screen.y() - center_screen.y())
+        radial_length = math.hypot(radial.x(), radial.y())
+        if radial_length <= 1e-6:
+            return
+
+        radial = QPointF(radial.x() / radial_length, radial.y() / radial_length)
+        offset = self._safe_angular_text_offset(arc_mid_screen, radial, rect, data, gap_px)
+        render_data["text_screen"] = QPointF(arc_mid_screen.x() + radial.x() * offset, arc_mid_screen.y() + radial.y() * offset)
+        render_data["text_screen_angle"] = 0.0
+        render_data["landing_screen"] = None
+        render_data["leader_screen"] = None
+
+    def _safe_angular_text_offset(self, arc_mid_screen: QPointF, radial: QPointF, rect, data: dict, gap_px: float) -> float:
+        margin = max(4.0, gap_px)
+        offset = rect.height() / 2.0 + margin
+        max_step = max(rect.height(), rect.width(), 20.0)
+        for _ in range(12):
+            center = QPointF(arc_mid_screen.x() + radial.x() * offset, arc_mid_screen.y() + radial.y() * offset)
+            text_box = self._screen_text_box(center, rect, margin)
+            if not self._dimension_screen_geometry_intersects_rect(data, text_box):
+                return offset
+            offset += max(3.0, max_step * 0.18)
+        return offset
+
+    def _screen_text_box(self, center: QPointF, rect, margin: float) -> QRectF:
+        return QRectF(
+            center.x() - rect.width() / 2.0 - margin,
+            center.y() - rect.height() / 2.0 - margin,
+            rect.width() + margin * 2.0,
+            rect.height() + margin * 2.0,
+        )
+
+    def _dimension_screen_geometry_intersects_rect(self, data: dict, rect: QRectF) -> bool:
+        for start, end in data.get("extension_lines", []):
+            if self._screen_segment_intersects_rect(self.map_from_scene(QPointF(start.x, start.y)), self.map_from_scene(QPointF(end.x, end.y)), rect):
+                return True
+        for start, end in data.get("segments", []):
+            if self._screen_segment_intersects_rect(self.map_from_scene(QPointF(start.x, start.y)), self.map_from_scene(QPointF(end.x, end.y)), rect):
+                return True
+        arc = data.get("arc")
+        if arc and self._screen_arc_intersects_rect(arc, rect):
+            return True
+        return False
+
+    def _screen_arc_intersects_rect(self, arc: dict, rect: QRectF) -> bool:
+        center = arc["center"]
+        radius = arc["radius"]
+        start_angle = math.radians(arc["start_angle_deg"])
+        span_angle = math.radians(arc["span_angle_deg"])
+        samples = max(24, int(abs(math.degrees(span_angle)) / 3.0))
+        previous = None
+        for index in range(samples + 1):
+            angle = start_angle + span_angle * (index / samples)
+            point = Point(center.x + math.cos(angle) * radius, center.y + math.sin(angle) * radius)
+            screen = self.map_from_scene(QPointF(point.x, point.y))
+            if previous is not None and self._screen_segment_intersects_rect(previous, screen, rect):
+                return True
+            previous = screen
+        return False
+
+    def _screen_segment_intersects_rect(self, start: QPointF, end: QPointF, rect: QRectF) -> bool:
+        if rect.contains(start) or rect.contains(end):
+            return True
+        edges = (
+            (rect.topLeft(), rect.topRight()),
+            (rect.topRight(), rect.bottomRight()),
+            (rect.bottomRight(), rect.bottomLeft()),
+            (rect.bottomLeft(), rect.topLeft()),
+        )
+        return any(self._screen_segments_intersect(start, end, edge_start, edge_end) for edge_start, edge_end in edges)
+
+    def _screen_segments_intersect(self, a: QPointF, b: QPointF, c: QPointF, d: QPointF) -> bool:
+        def orientation(p: QPointF, q: QPointF, r: QPointF) -> float:
+            return (q.x() - p.x()) * (r.y() - p.y()) - (q.y() - p.y()) * (r.x() - p.x())
+
+        def on_segment(p: QPointF, q: QPointF, r: QPointF) -> bool:
+            return (
+                min(p.x(), r.x()) - 1e-6 <= q.x() <= max(p.x(), r.x()) + 1e-6
+                and min(p.y(), r.y()) - 1e-6 <= q.y() <= max(p.y(), r.y()) + 1e-6
+            )
+
+        o1 = orientation(a, b, c)
+        o2 = orientation(a, b, d)
+        o3 = orientation(c, d, a)
+        o4 = orientation(c, d, b)
+        if o1 * o2 < 0 and o3 * o4 < 0:
+            return True
+        if abs(o1) <= 1e-6 and on_segment(a, c, b):
+            return True
+        if abs(o2) <= 1e-6 and on_segment(a, d, b):
+            return True
+        if abs(o3) <= 1e-6 and on_segment(c, a, d):
+            return True
+        if abs(o4) <= 1e-6 and on_segment(c, b, d):
+            return True
+        return False
 
     def _resolve_linear_dimension_screen_text_layout(self, render_data: dict, data: dict, rect, gap_px: float):
         extension_lines = data.get("extension_lines", [])

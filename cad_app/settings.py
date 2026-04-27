@@ -13,7 +13,7 @@ class AppSettings(QObject):
             "line_construction_mode": "cartesian",  # "cartesian" или "polar"
             "angle_units": "degrees",  # "degrees" или "radians"
             "dimensions": {
-                "text_height_mm": 3.5,
+                "text_height_mm": 6.0,
                 "arrow_size_mm": 3.5,
                 "font_mode": DIMENSION_FONT_MODE_GOST_ITALIC,
             },

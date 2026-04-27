@@ -37,7 +37,7 @@ def default_dimension_style() -> dict:
 
 def global_dimension_text_height_mm() -> float:
     dimensions = settings.get("dimensions") or settings.defaults.get("dimensions", {})
-    return float(dimensions.get("text_height_mm", 3.5))
+    return float(dimensions.get("text_height_mm", settings.defaults.get("dimensions", {}).get("text_height_mm", 6.0)))
 
 
 def global_dimension_arrow_size_mm() -> float:

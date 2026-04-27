@@ -99,7 +99,7 @@ class SettingsDialog(QDialog):
             self.angle_units_combo.setCurrentIndex(index)
 
         dimensions = settings.get("dimensions") or settings.defaults["dimensions"]
-        self.dimension_text_height_input.setValue(float(dimensions.get("text_height_mm", 3.5)))
+        self.dimension_text_height_input.setValue(float(dimensions.get("text_height_mm", settings.defaults["dimensions"]["text_height_mm"])))
         self.dimension_arrow_size_input.setValue(float(dimensions.get("arrow_size_mm", 3.5)))
         mode = dimensions.get("font_mode", settings.defaults["dimensions"].get("font_mode"))
         index = self.dimension_font_family_combo.findData(mode)
