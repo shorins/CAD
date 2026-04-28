@@ -125,6 +125,23 @@ def test_dxf_import_layers_and_overrides():
     print("✓ test_dxf_import_layers_and_overrides passed")
 
 
+def test_dxf_import_continuous_lineweight_to_thin_style():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "continuous_lineweights.dxf"
+        doc = ezdxf.new("R2010", setup=True)
+        msp = doc.modelspace()
+        msp.add_line((0, 0), (10, 0), dxfattribs={"linetype": "CONTINUOUS", "lineweight": 13})
+        msp.add_line((0, 1), (10, 1), dxfattribs={"linetype": "CONTINUOUS", "lineweight": 50})
+        doc.saveas(path)
+
+        result = import_dxf_file(path)
+
+    lines = [obj for obj in result["objects"] if isinstance(obj, Line)]
+    assert lines[0].style_name == "Сплошная тонкая"
+    assert lines[1].style_name == "Сплошная основная"
+    print("✓ test_dxf_import_continuous_lineweight_to_thin_style passed")
+
+
 def test_dxf_import_blocks_and_unsupported_entities():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "blocks_and_unsupported.dxf"
@@ -224,6 +241,24 @@ def test_dxf_import_real_fixture_promotions():
         assert all(spline.promotion_kind in {"heuristic_promotion", "direct"} for spline in splines)
 
     print("✓ test_dxf_import_real_fixture_promotions passed")
+
+
+def test_dxf_import_tflex_line_styles_fixture():
+    fixture_path = Path(__file__).resolve().parent.parent / "todo" / "TESTL.dxf"
+    assert fixture_path.exists(), "Ожидался fixture todo/TESTL.dxf"
+
+    result = import_dxf_file(fixture_path)
+    lines = [obj for obj in result["objects"] if isinstance(obj, Line)]
+
+    assert len(lines) >= 6
+    assert lines[0].style_name == "Сплошная основная"
+    assert lines[1].style_name == "Сплошная тонкая"
+    assert "tflex_r14_continuous_thin_fallback" in lines[1].import_flags
+    assert lines[2].style_name == "Штрихпунктирная тонкая"
+    assert lines[3].style_name == "Штриховая"
+    assert lines[4].style_name == "Штрихпунктирная с двумя точками"
+    assert lines[5].style_name == "Штрихпунктирная тонкая"
+    print("✓ test_dxf_import_tflex_line_styles_fixture passed")
 
 
 def test_dxf_export_autocad_linetype_names():
@@ -330,10 +365,12 @@ if __name__ == "__main__":
     test_dxf_export_import_roundtrip_basic()
     test_dxf_export_import_roundtrip_native_shapes()
     test_dxf_import_layers_and_overrides()
+    test_dxf_import_continuous_lineweight_to_thin_style()
     test_dxf_import_blocks_and_unsupported_entities()
     test_dxf_binary_import()
     test_json_preserves_dxf_metadata()
     test_dxf_import_real_fixture_promotions()
+    test_dxf_import_tflex_line_styles_fixture()
     test_dxf_export_autocad_linetype_names()
     test_color_mapping_and_fallback_resolution()
     test_dxf_export_import_object_aci_colors()
