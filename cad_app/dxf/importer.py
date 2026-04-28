@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +23,11 @@ from ..core.geometry import (
     Spline,
 )
 from ..core.layers import LayerRecord, default_layer
-from .mapping import display_style_for_layer, effective_linetype_name, entity_metadata_to_dict, map_linetype_to_style
+from .mapping import (
+    display_style_for_layer,
+    entity_metadata_to_dict,
+    style_from_dxf_attributes,
+)
 
 Z_TOLERANCE = 1e-6
 MAX_BLOCK_DEPTH = 8
@@ -39,6 +44,8 @@ class ImportCandidate:
     sequence: int
     is_virtual: bool = False
     from_insert: bool = False
+    forced_style_name: str | None = None
+    forced_style_reason: str | None = None
 
 
 def import_dxf_file(file_path: str | Path) -> dict:
@@ -90,6 +97,8 @@ def import_dxf_file(file_path: str | Path) -> dict:
             from_insert=False,
             sequence=sequence,
         )
+
+    _apply_tflex_r14_continuous_style_fallback(doc, flattened, report)
 
     tolerance = _compute_import_tolerance(document_meta)
     objects = _import_candidates(flattened, layers, report, Vec3=Vec3, tolerance=tolerance)
@@ -154,6 +163,59 @@ def _flatten_entity(entity, report, candidates: list[ImportCandidate], block_con
         )
     )
     sequence[0] += 1
+
+
+def _apply_tflex_r14_continuous_style_fallback(doc, candidates: list[ImportCandidate], report):
+    """Восстанавливает тонкую sample-линию в старых T-FLEX DXF без lineweight.
+
+    В R14-файлах T-FLEX встречается набор демонстрационных линий, где
+    "Сплошная основная" и "Сплошная тонкая" обе записаны как CONTINUOUS без
+    group code 370. Стандартного признака толщины там уже нет, поэтому
+    fallback включается только для T-FLEX-подобных файлов с именами типов
+    линий вида CENTER_PER.../HIDDEN_PER... и только для второй линии первой
+    непрерывной группы sample-линий.
+    """
+    if not _looks_like_tflex_r14_line_sample_doc(doc):
+        return
+
+    first_continuous_run: list[ImportCandidate] = []
+    for candidate in sorted(candidates, key=lambda item: item.sequence):
+        if candidate.entity_type != "LINE":
+            if first_continuous_run:
+                break
+            continue
+
+        metadata = entity_metadata_to_dict(candidate.entity)
+        if _is_plain_continuous_entity(metadata):
+            first_continuous_run.append(candidate)
+            continue
+
+        if first_continuous_run:
+            break
+
+    if len(first_continuous_run) < 2:
+        return
+
+    thin_candidate = first_continuous_run[1]
+    thin_candidate.forced_style_name = "Сплошная тонкая"
+    thin_candidate.forced_style_reason = "tflex_r14_continuous_thin_fallback"
+    report["warnings"].append(
+        "T-FLEX R14 DXF не содержит lineweight для второй CONTINUOUS sample-линии; "
+        "она импортирована как 'Сплошная тонкая' по совместимой эвристике."
+    )
+
+
+def _looks_like_tflex_r14_line_sample_doc(doc) -> bool:
+    if getattr(doc, "dxfversion", "") != "AC1015":
+        return False
+
+    linetype_names = {linetype.dxf.name.upper() for linetype in doc.linetypes}
+    return any(re.match(r"^(CENTER|HIDDEN|PHANTOM)_PER", name) for name in linetype_names)
+
+
+def _is_plain_continuous_entity(metadata: dict) -> bool:
+    linetype = str(metadata.get("linetype_name") or "BYLAYER").strip().upper()
+    return linetype in {"CONTINUOUS", "BYLAYER", "BYBLOCK"} and metadata.get("lineweight") in {None, -1, -2, -3}
 
 
 def _import_candidates(candidates: list[ImportCandidate], layers, report, Vec3, tolerance: float):
@@ -287,6 +349,8 @@ def _decompose_polyline_candidate(candidate: ImportCandidate, layers, report, Ve
             sequence=candidate.sequence,
             is_virtual=True,
             from_insert=candidate.from_insert,
+            forced_style_name=candidate.forced_style_name,
+            forced_style_reason=candidate.forced_style_reason,
         )
         try:
             obj = _import_direct_candidate(
@@ -313,8 +377,13 @@ def _promote_line_candidates(line_candidates: list[ImportCandidate], layers, rep
     candidates_by_signature: dict[tuple, list[ImportCandidate]] = defaultdict(list)
     for candidate in line_candidates:
         metadata = entity_metadata_to_dict(candidate.entity)
-        effective_linetype = effective_linetype_name(metadata["linetype_name"], layers.get(metadata["layer_name"]))
-        style_name = map_linetype_to_style(effective_linetype, display_style_for_layer(layers.get(metadata["layer_name"])))
+        layer = layers.get(metadata["layer_name"])
+        style_name = candidate.forced_style_name or style_from_dxf_attributes(
+            metadata["linetype_name"],
+            metadata["lineweight"],
+            layer,
+            display_style_for_layer(layer),
+        )
         if style_name in {"Сплошная волнистая", "Сплошная с изломами"}:
             continue
         candidates_by_signature[_line_candidate_signature(candidate)].append(candidate)
@@ -728,7 +797,11 @@ def _read_layers(doc) -> dict[str, LayerRecord]:
             linetype_name=getattr(layer.dxf, "linetype", "CONTINUOUS"),
             lineweight=getattr(layer.dxf, "lineweight", None),
             flags=int(getattr(layer.dxf, "flags", 0)),
-            display_style_name=map_linetype_to_style(getattr(layer.dxf, "linetype", "CONTINUOUS")),
+            display_style_name=style_from_dxf_attributes(
+                getattr(layer.dxf, "linetype", "CONTINUOUS"),
+                getattr(layer.dxf, "lineweight", None),
+                None,
+            ),
             plot=not bool(getattr(layer.dxf, "plot", 0) == 0),
         )
         layers[name] = record
@@ -751,9 +824,13 @@ def _read_document_meta(doc) -> dict:
 def _apply_candidate_metadata(obj, candidate: ImportCandidate, layers, promotion_kind: str, extra_flags=None):
     metadata = entity_metadata_to_dict(candidate.entity)
     layer = layers.get(metadata["layer_name"])
-    effective_linetype = effective_linetype_name(metadata["linetype_name"], layer)
 
-    obj.style_name = map_linetype_to_style(effective_linetype, display_style_for_layer(layer))
+    obj.style_name = candidate.forced_style_name or style_from_dxf_attributes(
+        metadata["linetype_name"],
+        metadata["lineweight"],
+        layer,
+        display_style_for_layer(layer),
+    )
     obj.layer_name = metadata["layer_name"]
     obj.aci_color = metadata["aci_color"]
     obj.true_color = metadata["true_color"]
@@ -772,6 +849,8 @@ def _apply_candidate_metadata(obj, candidate: ImportCandidate, layers, promotion
         obj.import_flags.append("virtual_entity")
     if candidate.block_context:
         obj.import_flags.append(f"block_context:{'/'.join(candidate.block_context)}")
+    if candidate.forced_style_reason:
+        obj.import_flags.append(candidate.forced_style_reason)
     if extra_flags:
         obj.import_flags.extend(extra_flags)
 
@@ -801,6 +880,7 @@ def _line_candidate_signature(candidate: ImportCandidate):
         metadata["true_color"],
         metadata["linetype_name"],
         metadata["lineweight"],
+        candidate.forced_style_name,
         tuple(candidate.block_context),
     )
 

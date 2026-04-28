@@ -12,6 +12,8 @@ from ..core.layers import LayerRecord
 DEFAULT_DXF_VERSION = "R2010"
 DEFAULT_LAYER_NAME = "0"
 MIXED_VALUE = "__MIXED__"
+DXF_DEFAULT_LINEWEIGHTS = {None, -1, -2, -3}
+THIN_LINEWEIGHT_LIMIT = 25
 
 ACI_PALETTE = {
     1: ("Красный", "#FF0000"),
@@ -73,7 +75,7 @@ def display_style_for_layer(layer: LayerRecord | None) -> str:
     if layer and layer.display_style_name:
         return layer.display_style_name
     if layer:
-        return map_linetype_to_style(layer.linetype_name)
+        return style_from_dxf_attributes(layer.linetype_name, layer.lineweight, layer)
     return "Сплошная основная"
 
 
@@ -85,6 +87,35 @@ def effective_linetype_name(entity_linetype: str | None, layer: LayerRecord | No
     if name == "BYBLOCK":
         return layer.linetype_name if layer else "CONTINUOUS"
     return entity_linetype or "CONTINUOUS"
+
+
+def effective_lineweight(entity_lineweight: int | None, layer: LayerRecord | None) -> int | None:
+    """Возвращает эффективную толщину DXF-линии в 1/100 мм."""
+    lineweight = _normalize_lineweight(entity_lineweight)
+    if lineweight is not None:
+        return lineweight
+    if layer:
+        return _normalize_lineweight(layer.lineweight)
+    return None
+
+
+def style_from_dxf_attributes(
+    linetype_name: str | None,
+    lineweight: int | None,
+    layer: LayerRecord | None,
+    fallback_style: str = "Сплошная основная",
+) -> str:
+    """Определяет внутренний стиль по DXF linetype + lineweight."""
+    effective_linetype = effective_linetype_name(linetype_name, layer)
+    style = map_linetype_to_style(effective_linetype, fallback_style)
+    normalized_linetype = _normalize_linetype_name(effective_linetype)
+
+    if style == "Сплошная основная" and normalized_linetype == "CONTINUOUS":
+        effective_weight = effective_lineweight(lineweight, layer)
+        if effective_weight is not None and effective_weight <= THIN_LINEWEIGHT_LIMIT:
+            return "Сплошная тонкая"
+
+    return style
 
 
 def rgb_int_to_hex(rgb_value: int | None) -> str | None:
@@ -207,6 +238,14 @@ def _normalize_aci(value) -> int | None:
     except (TypeError, ValueError):
         return None
     return None if color in {0, 256, 257} else color
+
+
+def _normalize_lineweight(value) -> int | None:
+    try:
+        lineweight = int(value)
+    except (TypeError, ValueError):
+        return None
+    return None if lineweight in DXF_DEFAULT_LINEWEIGHTS else lineweight
 
 
 def normalize_object_aci(value: int | None) -> int | None:
