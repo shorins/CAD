@@ -37,7 +37,7 @@ def default_dimension_style() -> dict:
 
 def global_dimension_text_height_mm() -> float:
     dimensions = settings.get("dimensions") or settings.defaults.get("dimensions", {})
-    return float(dimensions.get("text_height_mm", 3.5))
+    return float(dimensions.get("text_height_mm", settings.defaults.get("dimensions", {}).get("text_height_mm", 6.0)))
 
 
 def global_dimension_arrow_size_mm() -> float:
@@ -363,42 +363,27 @@ class LinearDimension(DimensionBase):
         text_w, text_h = self._estimate_text_size_scene()
         arrow = global_dimension_arrow_size_mm()
         text_gap = float(self.dimension_style.get("text_gap_mm", 1.0))
-        inside_text = not self.text_position_override and (text_w + 2 * (arrow + text_gap) <= line_length)
         arrows_inside = (2 * arrow <= line_length) and not self.arrows_flipped
         fit_result = "inside"
-        if not inside_text:
-            fit_result = "outside_text"
         if not arrows_inside:
             fit_result = "outside_arrows" if fit_result == "inside" else "outside_both"
 
         midpoint = ext1.midpoint(ext2)
-        text_position = midpoint
-        leader_points: list[Point] = []
-        landing_points: list[Point] = []
-        has_leader = False
         if self.text_position_override:
             text_position = self.text_position_override.copy()
-            offset_to_text = abs((text_position.x - midpoint.x) * normal.x + (text_position.y - midpoint.y) * normal.y)
-            if offset_to_text > max(text_gap * 1.5, text_h):
-                fit_result = "outside_text"
-                has_leader = True
-        elif not inside_text:
-            sign = 1.0 if ((placement.x - midpoint.x) * normal.x + (placement.y - midpoint.y) * normal.y) >= 0 else -1.0
+            fit_result = "outside_text"
+        else:
+            placement_side = ((placement.x - midpoint.x) * normal.x + (placement.y - midpoint.y) * normal.y) if placement else 1.0
+            sign = 1.0 if placement_side >= 0 else -1.0
+            text_offset = text_h + text_gap * 2.0 + abs(normal.x) * text_w * 0.65
             text_position = Point(
-                midpoint.x + normal.x * sign * (text_h + text_gap * 2.0),
-                midpoint.y + normal.y * sign * (text_h + text_gap * 2.0),
+                midpoint.x + normal.x * sign * text_offset,
+                midpoint.y + normal.y * sign * text_offset,
             )
-            has_leader = True
 
-        if has_leader:
-            if self.text_position_override:
-                leader_points, landing_points = _manual_text_leader_layout(midpoint, text_position, text_w, text_h)
-                text_angle = 0.0
-            else:
-                anchor = midpoint
-                landing_start = Point(text_position.x - axis.x * text_w * 0.35, text_position.y - axis.y * text_w * 0.35)
-                leader_points = [anchor, landing_start]
-                landing_points = [landing_start, text_position]
+        leader_points, landing_points = _horizontal_text_landing_layout(midpoint, text_position, text_w, text_h)
+        has_leader = True
+        text_angle = 0.0
 
         arrows = _linear_arrows(ext1, ext2, axis, arrow, arrows_inside)
         segments = [(ext1, ext2)] + leader_segments(leader_points, landing_points)
@@ -525,9 +510,11 @@ class RadialDimension(DimensionBase):
         arrows = []
 
         if text_position is None and inside_fit:
+            normal = Point(-axis.y, axis.x)
+            along = max(radius * 0.45, min(radius - arrow - text_gap, text_w * 0.6))
             text_position = Point(
-                center.x + axis.x * max(radius * 0.45, min(radius - arrow - text_gap, text_w * 0.6)),
-                center.y + axis.y * max(radius * 0.45, min(radius - arrow - text_gap, text_w * 0.6)),
+                center.x + axis.x * along + normal.x * (text_h + text_gap),
+                center.y + axis.y * along + normal.y * (text_h + text_gap),
             )
         elif text_position is None:
             outside_dist = max(radius + text_h * 1.25 + text_gap * 2.0, placement_dist)
@@ -536,33 +523,26 @@ class RadialDimension(DimensionBase):
         manual_outside = center.distance_to(text_position) > radius - max(text_gap * 2.0, arrow)
         if not inside_fit or manual_outside or _distance_from_axis(text_position, center, axis) > text_h:
             fit_result = "outside_text"
-            if self.text_position_override:
-                leader_points, landing_points = _manual_text_leader_layout(edge, text_position, text_w, text_h)
-            else:
-                kink = Point(center.x + axis.x * (radius + text_gap * 1.5), center.y + axis.y * (radius + text_gap * 1.5))
-                landing_start = Point(text_position.x - axis.x * text_w * 0.45, text_position.y - axis.y * text_w * 0.45)
-                leader_points = [edge, kink]
-                landing_points = [landing_start, text_position]
-            segments = [(center, edge)] + leader_segments(leader_points, landing_points)
             arrows = [{"tip": edge, "tail": _single_arrow_tail(edge, axis, arrow, outward=self.arrows_flipped)}]
         else:
             fit_result = "inside"
-            segments = [(center, edge)]
             arrows = [{"tip": edge, "tail": _single_arrow_tail(edge, axis, arrow, outward=self.arrows_flipped)}]
 
+        leader_points, landing_points = _horizontal_text_landing_layout(edge, text_position, text_w, text_h)
+        segments = [(center, edge)] + leader_segments(leader_points, landing_points)
         self.measured_value_cache = radius
         self.layout_state = {
             "segments": segments,
             "extension_lines": [],
             "text_position": text_position,
-            "text_angle": 0.0 if self.text_position_override else math.degrees(math.atan2(axis.y, axis.x)),
+            "text_angle": 0.0,
             "arrows": arrows,
             "snap_points": [center, edge, text_position] + leader_points + landing_points,
             "leader_points": leader_points,
             "landing_points": landing_points,
             "text_is_outside": fit_result != "inside",
             "arrows_are_outside": self.arrows_flipped,
-            "has_leader": bool(leader_points or landing_points),
+            "has_leader": True,
             "fit_result": fit_result,
         }
         self._update_layout_flags()
@@ -668,39 +648,33 @@ class DiameterDimension(DimensionBase):
             if center.distance_to(text_position) > radius:
                 fit_result = "outside_text"
         elif inside_fit:
-            text_position = center.copy()
+            normal = Point(-axis.y, axis.x)
+            text_position = Point(center.x + normal.x * (text_h + text_gap), center.y + normal.y * (text_h + text_gap))
         else:
             outside_dist = max(radius + text_h * 1.5, center.distance_to(placement))
             text_position = Point(center.x + axis.x * outside_dist, center.y + axis.y * outside_dist)
 
         if fit_result != "inside":
             near = end if end.distance_to(text_position) <= start.distance_to(text_position) else start
-            if self.text_position_override:
-                leader_points, landing_points = _manual_text_leader_layout(near, text_position, text_w, text_h)
-            else:
-                outward = _unit_vector(text_position - center) or axis
-                kink = Point(near.x + outward.x * (text_gap * 1.5), near.y + outward.y * (text_gap * 1.5))
-                landing_start = Point(text_position.x - outward.x * text_w * 0.45, text_position.y - outward.y * text_w * 0.45)
-                leader_points = [near, kink]
-                landing_points = [landing_start, text_position]
-            segments = [(start, end)] + leader_segments(leader_points, landing_points)
         else:
-            segments = [(start, end)]
+            near = center
 
+        leader_points, landing_points = _horizontal_text_landing_layout(near, text_position, text_w, text_h)
+        segments = [(start, end)] + leader_segments(leader_points, landing_points)
         arrows_inside = fit_result == "inside" and not self.arrows_flipped
         arrows = _linear_arrows(start, end, axis, arrow, arrows_inside)
         self.layout_state = {
             "segments": segments,
             "extension_lines": [],
             "text_position": text_position,
-            "text_angle": 0.0 if self.text_position_override else math.degrees(math.atan2(axis.y, axis.x)),
+            "text_angle": 0.0,
             "arrows": arrows,
             "snap_points": [start, center, end, text_position] + leader_points + landing_points,
             "leader_points": leader_points,
             "landing_points": landing_points,
             "text_is_outside": fit_result != "inside",
             "arrows_are_outside": not arrows_inside,
-            "has_leader": bool(leader_points or landing_points),
+            "has_leader": True,
             "fit_result": fit_result,
         }
         self._update_layout_flags()
@@ -724,34 +698,29 @@ class DiameterDimension(DimensionBase):
         landing_points: list[Point] = []
 
         if inside_fit:
+            normal = Point(-axis.y, axis.x)
+            along = max(radius * 0.45, min(radius - arrow - text_gap, text_w * 0.55))
             text_position = Point(
-                center.x + axis.x * max(radius * 0.45, min(radius - arrow - text_gap, text_w * 0.55)),
-                center.y + axis.y * max(radius * 0.45, min(radius - arrow - text_gap, text_w * 0.55)),
+                center.x + axis.x * along + normal.x * (text_h + text_gap),
+                center.y + axis.y * along + normal.y * (text_h + text_gap),
             )
-            segments = [(center, edge)]
         else:
-            if self.text_position_override:
-                leader_points, landing_points = _manual_text_leader_layout(edge, text_position, text_w, text_h)
-            else:
-                outward = _unit_vector(text_position - center) or axis
-                kink = Point(edge.x + outward.x * (text_gap * 1.5), edge.y + outward.y * (text_gap * 1.5))
-                landing_start = Point(text_position.x - outward.x * text_w * 0.45, text_position.y - outward.y * text_w * 0.45)
-                leader_points = [edge, kink]
-                landing_points = [landing_start, text_position]
-            segments = [(center, edge)] + leader_segments(leader_points, landing_points)
+            fit_result = "outside_text"
 
+        leader_points, landing_points = _horizontal_text_landing_layout(edge, text_position, text_w, text_h)
+        segments = [(center, edge)] + leader_segments(leader_points, landing_points)
         self.layout_state = {
             "segments": segments,
             "extension_lines": [],
             "text_position": text_position,
-            "text_angle": 0.0 if self.text_position_override else math.degrees(math.atan2(axis.y, axis.x)),
+            "text_angle": 0.0,
             "arrows": [{"tip": edge, "tail": _single_arrow_tail(edge, axis, arrow, outward=self.arrows_flipped)}],
             "snap_points": [center, edge, text_position] + leader_points + landing_points,
             "leader_points": leader_points,
             "landing_points": landing_points,
             "text_is_outside": fit_result != "inside",
             "arrows_are_outside": self.arrows_flipped,
-            "has_leader": bool(leader_points or landing_points),
+            "has_leader": True,
             "fit_result": fit_result,
         }
         self._update_layout_flags()
@@ -841,19 +810,22 @@ class AngularDimension(DimensionBase):
         start = Point(vertex.x + math.cos(a1) * radius, vertex.y + math.sin(a1) * radius)
         end = Point(vertex.x + math.cos(a2) * radius, vertex.y + math.sin(a2) * radius)
         text_w, text_h = self._estimate_text_size_scene()
-        default_text = Point(vertex.x + math.cos(mid_angle) * radius, vertex.y + math.sin(mid_angle) * radius)
-        text_position = self.text_position_override.copy() if self.text_position_override else default_text
-        has_leader = text_position.distance_to(default_text) > max(text_h, 2.0)
-        leader_points = []
-        landing_points = []
-        if has_leader:
-            if self.text_position_override:
-                leader_points, landing_points = _manual_text_leader_layout(default_text, text_position, text_w, text_h)
-            else:
-                text_dir = _unit_vector(text_position - vertex) or Point(math.cos(mid_angle), math.sin(mid_angle))
-                landing_start = Point(text_position.x - text_dir.x * text_w * 0.35, text_position.y - text_dir.y * text_w * 0.35)
-                leader_points = [default_text, landing_start]
-                landing_points = [landing_start, text_position]
+        arc_mid = Point(vertex.x + math.cos(mid_angle) * radius, vertex.y + math.sin(mid_angle) * radius)
+        radial = Point(math.cos(mid_angle), math.sin(mid_angle))
+        text_gap = float(self.dimension_style.get("text_gap_mm", 1.0))
+        default_text = Point(
+            arc_mid.x + radial.x * (text_h * 0.7 + text_gap),
+            arc_mid.y + radial.y * (text_h * 0.7 + text_gap),
+        )
+        if self.text_position_override:
+            text_position = self.text_position_override.copy()
+            leader_points, landing_points = _horizontal_text_landing_layout(arc_mid, text_position, text_w, text_h)
+            has_leader = True
+        else:
+            text_position = default_text
+            leader_points = []
+            landing_points = []
+            has_leader = False
 
         self.measured_value_cache = math.degrees(span)
         arrow = global_dimension_arrow_size_mm()
@@ -869,7 +841,7 @@ class AngularDimension(DimensionBase):
                 "span_angle_deg": math.degrees(span),
             },
             "text_position": text_position,
-            "text_angle": 0.0 if self.text_position_override else math.degrees(mid_angle),
+            "text_angle": 0.0,
             "arrows": [
                 {"tip": start, "tail": tangent_start},
                 {"tip": end, "tail": tangent_end},
@@ -981,11 +953,10 @@ def resolve_selector_point(obj, selector: Optional[str]) -> Optional[Point]:
 
 
 def leader_segments(leader_points: list[Point], landing_points: list[Point]) -> list[tuple[Point, Point]]:
-    points = list(leader_points) + list(landing_points)
-    return [(points[i], points[i + 1]) for i in range(len(points) - 1)] if len(points) >= 2 else []
+    return []
 
 
-def _manual_text_leader_layout(anchor: Point, text_position: Point, text_width: float, text_height: float) -> tuple[list[Point], list[Point]]:
+def _horizontal_text_landing_layout(anchor: Point, text_position: Point, text_width: float, text_height: float) -> tuple[list[Point], list[Point]]:
     landing_y = text_position.y - text_height * 0.75
     left = Point(text_position.x - text_width * 0.55, landing_y)
     right = Point(text_position.x + text_width * 0.55, landing_y)

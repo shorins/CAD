@@ -463,8 +463,12 @@ class CanvasWidget(QWidget):
         if active_tool == "angular_dimension":
             clicked_object = self._get_object_at_cursor(event.position(), include_dimensions=False)
             _, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
+            has_model_snap = (
+                self.current_snap_point is not None
+                and not isinstance(getattr(self.current_snap_point, "source_object", None), DimensionBase)
+            )
             if not self.dimension_session:
-                if isinstance(clicked_object, Line):
+                if isinstance(clicked_object, Line) and not has_model_snap:
                     self.dimension_session = {"tool": active_tool, "step": 1, "mode": "lines", "line1": clicked_object}
                 else:
                     self.dimension_session = {"tool": active_tool, "step": 1, "mode": "points", "anchors": [click_anchor]}
@@ -475,9 +479,16 @@ class CanvasWidget(QWidget):
                 return True
             if self.dimension_session.get("mode") == "lines" and self.dimension_session["step"] == 1:
                 if isinstance(clicked_object, Line) and clicked_object is not self.dimension_session["line1"]:
-                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(self.dimension_session["line1"], clicked_object)
+                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(self.dimension_session["line1"], clicked_object, Point(click_scene_pos.x(), click_scene_pos.y()))
                     if vertex is not None:
-                        self.dimension_session = {"tool": active_tool, "step": 3, "mode": "lines", "anchors": [vertex, sel1, sel2]}
+                        self.dimension_session = {
+                            "tool": active_tool,
+                            "step": 3,
+                            "mode": "lines",
+                            "line1": self.dimension_session["line1"],
+                            "line2": clicked_object,
+                            "anchors": [vertex, sel1, sel2],
+                        }
                         self.start_pos = self.map_from_scene(click_scene_pos)
                         self.current_pos = self.start_pos
                         self._set_dimension_hint(active_tool)
@@ -492,6 +503,15 @@ class CanvasWidget(QWidget):
                 self._set_dimension_hint(active_tool)
                 self.update()
                 return True
+            if self.dimension_session.get("mode") == "lines" and self.dimension_session.get("line1") and self.dimension_session.get("line2"):
+                placement = Point(click_scene_pos.x(), click_scene_pos.y())
+                vertex, sel1, sel2 = self._build_angular_selectors_from_lines(
+                    self.dimension_session["line1"],
+                    self.dimension_session["line2"],
+                    placement,
+                )
+                if vertex is not None:
+                    anchors = [vertex, sel1, sel2]
             dim = AngularDimension(anchors[0], anchors[1], anchors[2])
             dim.dimension_line_anchor = click_anchor
             dim.recompute(self.scene)
@@ -507,7 +527,7 @@ class CanvasWidget(QWidget):
 
         return False
 
-    def _build_angular_selectors_from_lines(self, line1: Line, line2: Line):
+    def _build_angular_selectors_from_lines(self, line1: Line, line2: Line, placement: Point | None = None):
         candidates = [
             ("start", line1.start, "start", line2.start),
             ("start", line1.start, "end", line2.end),
@@ -520,7 +540,98 @@ class CanvasWidget(QWidget):
                 ray1 = DimensionAnchor(mode="object_snap", object_id=line1.object_id, selector="end" if selector1 == "start" else "start", cached_point=(line1.end if selector1 == "start" else line1.start).copy())
                 ray2 = DimensionAnchor(mode="object_snap", object_id=line2.object_id, selector="end" if selector2 == "start" else "start", cached_point=(line2.end if selector2 == "start" else line2.start).copy())
                 return vertex, ray1, ray2
-        return None, None, None
+
+        intersection = self._line_intersection_point(line1, line2)
+        if intersection is None:
+            return None, None, None
+
+        dir1 = self._line_unit_direction(line1)
+        dir2 = self._line_unit_direction(line2)
+        if dir1 is None or dir2 is None:
+            return None, None, None
+        ray1_dir, ray2_dir = self._choose_angular_ray_directions(dir1, dir2, intersection, placement)
+        ray1_point = self._point_on_line_ray(line1, intersection, ray1_dir)
+        ray2_point = self._point_on_line_ray(line2, intersection, ray2_dir)
+        return (
+            DimensionAnchor(mode="fixed", cached_point=intersection.copy()),
+            DimensionAnchor(mode="fixed", cached_point=ray1_point.copy()),
+            DimensionAnchor(mode="fixed", cached_point=ray2_point.copy()),
+        )
+
+    def _line_unit_direction(self, line: Line) -> Point | None:
+        dx = line.end.x - line.start.x
+        dy = line.end.y - line.start.y
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        return Point(dx / length, dy / length)
+
+    def _choose_angular_ray_directions(self, dir1: Point, dir2: Point, vertex: Point, placement: Point | None) -> tuple[Point, Point]:
+        directions1 = [dir1, Point(-dir1.x, -dir1.y)]
+        directions2 = [dir2, Point(-dir2.x, -dir2.y)]
+        if placement is None or placement.distance_to(vertex) <= 1e-9:
+            return directions1[0], directions2[0]
+
+        placement_angle = math.atan2(placement.y - vertex.y, placement.x - vertex.x)
+        best = None
+        for ray1 in directions1:
+            for ray2 in directions2:
+                a1 = math.atan2(ray1.y, ray1.x)
+                a2 = math.atan2(ray2.y, ray2.x)
+                for first, second, start_angle, end_angle in (
+                    (ray1, ray2, a1, a2),
+                    (ray2, ray1, a2, a1),
+                ):
+                    span = self._positive_angle_delta(end_angle - start_angle)
+                    if span > math.pi + 1e-6:
+                        continue
+                    contains = self._angle_between_ccw(placement_angle, start_angle, end_angle)
+                    mid = start_angle + span / 2.0
+                    distance = abs(math.atan2(math.sin(placement_angle - mid), math.cos(placement_angle - mid)))
+                    score = (0 if contains else 1, distance, span)
+                    if best is None or score < best[0]:
+                        best = (score, first, second)
+
+        if best is None:
+            return directions1[0], directions2[0]
+        return best[1], best[2]
+
+    def _point_on_line_ray(self, line: Line, vertex: Point, direction: Point) -> Point:
+        candidates = [line.start, line.end]
+        positive = [
+            (point, (point.x - vertex.x) * direction.x + (point.y - vertex.y) * direction.y)
+            for point in candidates
+        ]
+        positive = [(point, projection) for point, projection in positive if projection > 1e-6]
+        if positive:
+            return max(positive, key=lambda item: item[1])[0].copy()
+        fallback_length = max(vertex.distance_to(line.start), vertex.distance_to(line.end), 10.0)
+        return Point(vertex.x + direction.x * fallback_length, vertex.y + direction.y * fallback_length)
+
+    def _positive_angle_delta(self, angle: float) -> float:
+        while angle < 0:
+            angle += math.tau
+        while angle >= math.tau:
+            angle -= math.tau
+        return angle
+
+    def _angle_between_ccw(self, angle: float, start: float, end: float) -> bool:
+        return self._positive_angle_delta(angle - start) <= self._positive_angle_delta(end - start) + 1e-9
+
+    def _line_intersection_point(self, line1: Line, line2: Line) -> Point | None:
+        x1, y1 = line1.start.x, line1.start.y
+        x2, y2 = line1.end.x, line1.end.y
+        x3, y3 = line2.start.x, line2.start.y
+        x4, y4 = line2.end.x, line2.end.y
+        denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denominator) <= 1e-9:
+            return None
+
+        det1 = x1 * y2 - y1 * x2
+        det2 = x3 * y4 - y3 * x4
+        px = (det1 * (x3 - x4) - (x1 - x2) * det2) / denominator
+        py = (det1 * (y3 - y4) - (y1 - y2) * det2) / denominator
+        return Point(px, py)
 
     def on_settings_changed(self):
         """Слот, который вызывается при изменении настроек."""
@@ -1664,6 +1775,7 @@ class CanvasWidget(QWidget):
             return
         dimension_pen = self._make_dimension_pen(color, obj.dimension_style.get("dimension_line_style_name", "Сплошная тонкая"))
         extension_pen = self._make_dimension_pen(color, obj.dimension_style.get("extension_line_style_name", "Сплошная тонкая"))
+        render_data = self._resolve_dimension_screen_text_layout(painter, obj, data)
 
         for start, end in data.get("extension_lines", []):
             painter.setPen(extension_pen)
@@ -1679,7 +1791,8 @@ class CanvasWidget(QWidget):
         for arrow in data.get("arrows", []):
             self._draw_dimension_arrow(painter, arrow["tip"], arrow["tail"], obj, color)
 
-        self._draw_dimension_text(painter, obj, data, color)
+        self._draw_dimension_screen_landing(painter, render_data, dimension_pen)
+        self._draw_dimension_text(painter, obj, render_data, color)
 
     def _make_dimension_pen(self, color: QColor, style_name: str) -> QPen:
         style = style_manager.get_style(style_name)
@@ -1746,6 +1859,22 @@ class CanvasWidget(QWidget):
         if text_position is None:
             return
         painter.save()
+        painter.setFont(data.get("font", painter.font()))
+        painter.setPen(QPen(color))
+        screen = data.get("text_screen")
+        if screen is None:
+            screen = self.map_from_scene(QPointF(text_position.x, text_position.y))
+        angle = data.get("text_screen_angle")
+        if angle is None:
+            angle = self._normalize_dimension_text_angle(data.get("text_angle", 0.0) - self.rotation_angle)
+        text = data.get("text", "")
+        rect = data.get("text_rect") or painter.fontMetrics().boundingRect(text)
+        painter.translate(screen)
+        painter.rotate(-angle)
+        painter.drawText(QPointF(-rect.width() / 2, rect.height() / 3), text)
+        painter.restore()
+
+    def _dimension_font(self, painter: QPainter):
         font = painter.font()
         from .core.geometry.dimensions import global_dimension_font_spec, global_dimension_text_height_mm
         pixel_size = max(8, int(round(self._mm_to_pixels(global_dimension_text_height_mm()))))
@@ -1753,16 +1882,232 @@ class CanvasWidget(QWidget):
         font.setFamily(family)
         font.setItalic(italic)
         font.setPixelSize(pixel_size)
+        return font
+
+    def _resolve_dimension_screen_text_layout(self, painter: QPainter, obj: DimensionBase, data: dict) -> dict:
+        render_data = dict(data)
+        text_position = data.get("text_position")
+        if text_position is None:
+            return render_data
+
+        font = self._dimension_font(painter)
+        painter.save()
         painter.setFont(font)
-        painter.setPen(QPen(color))
-        screen = self.map_from_scene(QPointF(text_position.x, text_position.y))
-        angle = self._normalize_dimension_text_angle(data.get("text_angle", 0.0) - self.rotation_angle)
         metrics = painter.fontMetrics()
         text = data.get("text", "")
         rect = metrics.boundingRect(text)
-        painter.translate(screen)
-        painter.rotate(-angle)
-        painter.drawText(QPointF(-rect.width() / 2, rect.height() / 3), text)
+        painter.restore()
+
+        text_center = self.map_from_scene(QPointF(text_position.x, text_position.y))
+        gap_px = max(2.0, self._mm_to_pixels(float(obj.dimension_style.get("text_gap_mm", 1.0))))
+        landing_screen = None
+        leader_screen = None
+        if data.get("has_leader", False):
+            landing_padding_px = max(6.0, gap_px * 2.0)
+            landing_y = text_center.y() + rect.height() / 2.0 + gap_px
+            landing_half_width = rect.width() / 2.0 + landing_padding_px
+            landing_start = QPointF(text_center.x() - landing_half_width, landing_y)
+            landing_end = QPointF(text_center.x() + landing_half_width, landing_y)
+
+            leader_anchor = self._dimension_text_leader_anchor(data)
+            leader_screen_start = self.map_from_scene(QPointF(leader_anchor.x, leader_anchor.y)) if leader_anchor else None
+            if leader_screen_start is not None:
+                leader_screen_end = landing_start if leader_screen_start.x() <= text_center.x() else landing_end
+                leader_screen = (leader_screen_start, leader_screen_end)
+            landing_screen = (landing_start, landing_end)
+
+        render_data.update({
+            "font": font,
+            "text_rect": rect,
+            "text_screen": text_center,
+            "text_screen_angle": 0.0,
+            "landing_screen": landing_screen,
+            "leader_screen": leader_screen,
+        })
+
+        if data.get("kind") == "linear":
+            self._resolve_linear_dimension_screen_text_layout(render_data, data, rect, gap_px)
+        elif data.get("kind") == "angular" and not data.get("has_leader", False):
+            self._resolve_angular_dimension_screen_text_layout(render_data, data, rect, gap_px)
+        return render_data
+
+    def _resolve_angular_dimension_screen_text_layout(self, render_data: dict, data: dict, rect, gap_px: float):
+        arc = data.get("arc")
+        if not arc:
+            return
+
+        center = arc["center"]
+        radius = arc["radius"]
+        start_angle = math.radians(arc["start_angle_deg"])
+        span_angle = math.radians(arc["span_angle_deg"])
+        if radius <= 1e-6 or abs(span_angle) <= 1e-9:
+            return
+
+        mid_angle = start_angle + span_angle / 2.0
+        arc_mid = Point(center.x + math.cos(mid_angle) * radius, center.y + math.sin(mid_angle) * radius)
+        center_screen = self.map_from_scene(QPointF(center.x, center.y))
+        arc_mid_screen = self.map_from_scene(QPointF(arc_mid.x, arc_mid.y))
+        radial = QPointF(arc_mid_screen.x() - center_screen.x(), arc_mid_screen.y() - center_screen.y())
+        radial_length = math.hypot(radial.x(), radial.y())
+        if radial_length <= 1e-6:
+            return
+
+        radial = QPointF(radial.x() / radial_length, radial.y() / radial_length)
+        offset = self._safe_angular_text_offset(arc_mid_screen, radial, rect, data, gap_px)
+        render_data["text_screen"] = QPointF(arc_mid_screen.x() + radial.x() * offset, arc_mid_screen.y() + radial.y() * offset)
+        render_data["text_screen_angle"] = 0.0
+        render_data["landing_screen"] = None
+        render_data["leader_screen"] = None
+
+    def _safe_angular_text_offset(self, arc_mid_screen: QPointF, radial: QPointF, rect, data: dict, gap_px: float) -> float:
+        margin = max(4.0, gap_px)
+        offset = rect.height() / 2.0 + margin
+        max_step = max(rect.height(), rect.width(), 20.0)
+        for _ in range(12):
+            center = QPointF(arc_mid_screen.x() + radial.x() * offset, arc_mid_screen.y() + radial.y() * offset)
+            text_box = self._screen_text_box(center, rect, margin)
+            if not self._dimension_screen_geometry_intersects_rect(data, text_box):
+                return offset
+            offset += max(3.0, max_step * 0.18)
+        return offset
+
+    def _screen_text_box(self, center: QPointF, rect, margin: float) -> QRectF:
+        return QRectF(
+            center.x() - rect.width() / 2.0 - margin,
+            center.y() - rect.height() / 2.0 - margin,
+            rect.width() + margin * 2.0,
+            rect.height() + margin * 2.0,
+        )
+
+    def _dimension_screen_geometry_intersects_rect(self, data: dict, rect: QRectF) -> bool:
+        for start, end in data.get("extension_lines", []):
+            if self._screen_segment_intersects_rect(self.map_from_scene(QPointF(start.x, start.y)), self.map_from_scene(QPointF(end.x, end.y)), rect):
+                return True
+        for start, end in data.get("segments", []):
+            if self._screen_segment_intersects_rect(self.map_from_scene(QPointF(start.x, start.y)), self.map_from_scene(QPointF(end.x, end.y)), rect):
+                return True
+        arc = data.get("arc")
+        if arc and self._screen_arc_intersects_rect(arc, rect):
+            return True
+        return False
+
+    def _screen_arc_intersects_rect(self, arc: dict, rect: QRectF) -> bool:
+        center = arc["center"]
+        radius = arc["radius"]
+        start_angle = math.radians(arc["start_angle_deg"])
+        span_angle = math.radians(arc["span_angle_deg"])
+        samples = max(24, int(abs(math.degrees(span_angle)) / 3.0))
+        previous = None
+        for index in range(samples + 1):
+            angle = start_angle + span_angle * (index / samples)
+            point = Point(center.x + math.cos(angle) * radius, center.y + math.sin(angle) * radius)
+            screen = self.map_from_scene(QPointF(point.x, point.y))
+            if previous is not None and self._screen_segment_intersects_rect(previous, screen, rect):
+                return True
+            previous = screen
+        return False
+
+    def _screen_segment_intersects_rect(self, start: QPointF, end: QPointF, rect: QRectF) -> bool:
+        if rect.contains(start) or rect.contains(end):
+            return True
+        edges = (
+            (rect.topLeft(), rect.topRight()),
+            (rect.topRight(), rect.bottomRight()),
+            (rect.bottomRight(), rect.bottomLeft()),
+            (rect.bottomLeft(), rect.topLeft()),
+        )
+        return any(self._screen_segments_intersect(start, end, edge_start, edge_end) for edge_start, edge_end in edges)
+
+    def _screen_segments_intersect(self, a: QPointF, b: QPointF, c: QPointF, d: QPointF) -> bool:
+        def orientation(p: QPointF, q: QPointF, r: QPointF) -> float:
+            return (q.x() - p.x()) * (r.y() - p.y()) - (q.y() - p.y()) * (r.x() - p.x())
+
+        def on_segment(p: QPointF, q: QPointF, r: QPointF) -> bool:
+            return (
+                min(p.x(), r.x()) - 1e-6 <= q.x() <= max(p.x(), r.x()) + 1e-6
+                and min(p.y(), r.y()) - 1e-6 <= q.y() <= max(p.y(), r.y()) + 1e-6
+            )
+
+        o1 = orientation(a, b, c)
+        o2 = orientation(a, b, d)
+        o3 = orientation(c, d, a)
+        o4 = orientation(c, d, b)
+        if o1 * o2 < 0 and o3 * o4 < 0:
+            return True
+        if abs(o1) <= 1e-6 and on_segment(a, c, b):
+            return True
+        if abs(o2) <= 1e-6 and on_segment(a, d, b):
+            return True
+        if abs(o3) <= 1e-6 and on_segment(c, a, d):
+            return True
+        if abs(o4) <= 1e-6 and on_segment(c, b, d):
+            return True
+        return False
+
+    def _resolve_linear_dimension_screen_text_layout(self, render_data: dict, data: dict, rect, gap_px: float):
+        extension_lines = data.get("extension_lines", [])
+        if len(extension_lines) < 2:
+            return
+
+        dim_start = extension_lines[0][1]
+        dim_end = extension_lines[1][1]
+        start_screen = self.map_from_scene(QPointF(dim_start.x, dim_start.y))
+        end_screen = self.map_from_scene(QPointF(dim_end.x, dim_end.y))
+        dx = end_screen.x() - start_screen.x()
+        dy = end_screen.y() - start_screen.y()
+        length = math.hypot(dx, dy)
+        if length <= 1e-6:
+            return
+
+        axis = QPointF(dx / length, dy / length)
+        normal = QPointF(-dy / length, dx / length)
+        midpoint = QPointF((start_screen.x() + end_screen.x()) / 2.0, (start_screen.y() + end_screen.y()) / 2.0)
+        current = render_data.get("text_screen") or midpoint
+        offset_from_mid = QPointF(current.x() - midpoint.x(), current.y() - midpoint.y())
+        side = offset_from_mid.x() * normal.x() + offset_from_mid.y() * normal.y()
+        along = offset_from_mid.x() * axis.x() + offset_from_mid.y() * axis.y()
+        if abs(side) < 1e-6:
+            side = -1.0
+        sign = 1.0 if side >= 0 else -1.0
+        base = QPointF(midpoint.x() + axis.x() * along, midpoint.y() + axis.y() * along)
+        offset = rect.height() / 2.0 + gap_px
+        render_data["text_screen"] = QPointF(
+            base.x() + normal.x() * sign * offset,
+            base.y() + normal.y() * sign * offset,
+        )
+        line_angle = math.degrees(math.atan2(dy, dx))
+        render_data["text_screen_angle"] = self._normalize_dimension_text_angle(-line_angle)
+        render_data["landing_screen"] = None
+        render_data["leader_screen"] = None
+
+    def _dimension_text_leader_anchor(self, data: dict):
+        kind = data.get("kind")
+        if kind == "angular" and "arc" in data:
+            arc = data["arc"]
+            angle = math.radians(arc["start_angle_deg"] + arc["span_angle_deg"] / 2.0)
+            center = arc["center"]
+            radius = arc["radius"]
+            return Point(center.x + math.cos(angle) * radius, center.y + math.sin(angle) * radius)
+        segments = data.get("segments", [])
+        if segments:
+            return segments[0][1]
+        snap_points = data.get("snap_points", [])
+        if snap_points:
+            return snap_points[0]
+        return data.get("text_position")
+
+    def _draw_dimension_screen_landing(self, painter: QPainter, data: dict, pen: QPen):
+        landing = data.get("landing_screen")
+        if not landing:
+            return
+        painter.save()
+        painter.setPen(pen)
+        leader = data.get("leader_screen")
+        if leader:
+            start, end = leader
+            painter.drawLine(start, end)
+        start, end = landing
+        painter.drawLine(start, end)
         painter.restore()
 
     def _mm_to_pixels(self, value_mm: float) -> float:
@@ -2422,11 +2767,15 @@ class CanvasWidget(QWidget):
         elif active_tool == 'angular_dimension':
             _, click_anchor = self._dimension_preview_point(current_scene_pos)
             session = self.dimension_session or {}
-            if session.get("mode") == "lines" and session.get("line1") is not None:
+            if session.get("mode") == "lines" and session.get("line1") is not None and session.get("line2") is None:
                 line = session["line1"]
                 painter.drawLine(self.map_from_scene(QPointF(line.start.x, line.start.y)), self.map_from_scene(QPointF(line.end.x, line.end.y)))
             else:
                 anchors = session.get("anchors", [])
+                if session.get("mode") == "lines" and session.get("line1") is not None and session.get("line2") is not None:
+                    placement = Point(current_scene_pos.x(), current_scene_pos.y())
+                    vertex, sel1, sel2 = self._build_angular_selectors_from_lines(session["line1"], session["line2"], placement)
+                    anchors = [vertex, sel1, sel2] if vertex is not None else []
                 if len(anchors) == 1:
                     p1 = anchors[0].cached_point
                     if p1:
