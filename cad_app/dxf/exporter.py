@@ -177,16 +177,41 @@ def _export_rectangle(msp, obj: Rectangle, layer: LayerRecord, report: dict) -> 
 
 
 def _export_spline(msp, obj: Spline):
-    if obj.control_points and obj.knots:
+    """Экспорт сплайна в DXF.
+
+    Для сплайнов с точными DXF-данными (knots/weights) — записываем нативный
+    SPLINE, чтобы сохранить математическую точность.
+
+    Для пользовательских сплайнов (Catmull-Rom без knot-вектора) — сэмплируем
+    кривую в точки и записываем как LWPOLYLINE.  Это гарантирует, что визуальная
+    форма в T-FLEX / AutoCAD / любом другом CAD будет совпадать с тем, что
+    пользователь видит на экране.  Передача контрольных точек Catmull-Rom
+    в ``add_spline`` как fit-points приводила к тому, что принимающий CAD
+    перестраивал B-spline по-своему и форма менялась.
+    """
+    # --- Точный DXF-сплайн (импортированный с knot-вектором) ----------------
+    if obj.is_exact_dxf_spline and obj.control_points and obj.knots:
         control_points = [(point.x, point.y, 0.0) for point in obj.control_points]
         if obj.weights:
-            entity = msp.add_rational_spline(control_points, obj.weights, degree=obj.degree, knots=obj.knots)
-        else:
-            entity = msp.add_open_spline(control_points, degree=obj.degree, knots=obj.knots)
-        return entity
+            return msp.add_rational_spline(
+                control_points, obj.weights,
+                degree=obj.degree, knots=obj.knots,
+            )
+        return msp.add_open_spline(
+            control_points, degree=obj.degree, knots=obj.knots,
+        )
 
-    fit_points = obj.fit_points or obj.control_points
-    return msp.add_spline([(point.x, point.y, 0.0) for point in fit_points], degree=max(2, obj.degree))
+    # --- Пользовательский (Catmull-Rom) сплайн → полилиния ------------------
+    curve_points = obj.get_curve_points()
+    if len(curve_points) < 2:
+        # Слишком мало точек — записываем как нативный SPLINE-fallback
+        pts = obj.fit_points or obj.control_points
+        return msp.add_spline(
+            [(p.x, p.y, 0.0) for p in pts], degree=max(2, obj.degree),
+        )
+
+    polyline_points = [(p.x, p.y) for p in curve_points]
+    return msp.add_lwpolyline(polyline_points, close=obj.closed)
 
 
 def _export_wavy_line_as_spline(msp, obj: Line):
