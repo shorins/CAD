@@ -34,12 +34,16 @@ class DimensionInputPanel(QWidget):
 
     def set_active_tool(self, tool_name: str):
         self._active_tool = tool_name
-        is_linear = tool_name == "linear_dimension"
-        self.mode_label.setVisible(is_linear)
-        self.linear_mode_combo.setVisible(is_linear)
+        # Комбобокс типа линейного размера показываем только для generic linear_dimension.
+        # Для horizontal/vertical отдельных инструментов он не нужен — mode уже задан кнопкой.
+        is_linear_generic = tool_name == "linear_dimension"
+        self.mode_label.setVisible(is_linear_generic)
+        self.linear_mode_combo.setVisible(is_linear_generic)
 
         hints = {
             "linear_dimension": "Шаги: первая точка, вторая точка, положение размерной линии.",
+            "horizontal_dimension": "Горизонтальный размер: первая точка → вторая точка → положение.",
+            "vertical_dimension": "Вертикальный размер: первая точка → вторая точка → положение.",
             "radial_dimension": "Шаги: выберите окружность/дугу, затем положение размерной линии.",
             "diameter_dimension": "Шаги: выберите окружность/дугу, затем положение диаметрального размера.",
             "angular_dimension": "Шаги: две линии или три точки угла, затем положение дуги/текста.",

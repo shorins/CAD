@@ -31,8 +31,10 @@ class CanvasWidget(QWidget):
         Args:
             scene: Сцена с объектами
             tool_actions: Словарь с actions инструментов:
-                'select', 'line', 'circle', 'arc', 'rectangle', 
-                'ellipse', 'polygon', 'spline', 'linear_dimension', 'radial_dimension', 'diameter_dimension', 'angular_dimension', 'delete'
+                'select', 'line', 'circle', 'arc', 'rectangle',
+                'ellipse', 'polygon', 'spline', 'linear_dimension',
+                'horizontal_dimension', 'vertical_dimension',
+                'radial_dimension', 'diameter_dimension', 'angular_dimension', 'delete'
         """
         legacy_mode = not isinstance(tool_actions, dict)
         legacy_line_action = None
@@ -58,6 +60,8 @@ class CanvasWidget(QWidget):
                 'polygon': QAction(self),
                 'spline': QAction(self),
                 'linear_dimension': QAction(self),
+                'horizontal_dimension': QAction(self),
+                'vertical_dimension': QAction(self),
                 'radial_dimension': QAction(self),
                 'diameter_dimension': QAction(self),
                 'angular_dimension': QAction(self),
@@ -76,6 +80,8 @@ class CanvasWidget(QWidget):
         self.polygon_tool_action = self.tool_actions.get('polygon')
         self.spline_tool_action = self.tool_actions.get('spline')
         self.linear_dimension_tool_action = self.tool_actions.get('linear_dimension')
+        self.horizontal_dimension_tool_action = self.tool_actions.get('horizontal_dimension')
+        self.vertical_dimension_tool_action = self.tool_actions.get('vertical_dimension')
         self.radial_dimension_tool_action = self.tool_actions.get('radial_dimension')
         self.diameter_dimension_tool_action = self.tool_actions.get('diameter_dimension')
         self.angular_dimension_tool_action = self.tool_actions.get('angular_dimension')
@@ -209,6 +215,10 @@ class CanvasWidget(QWidget):
             return 'spline'
         if self.linear_dimension_tool_action and self.linear_dimension_tool_action.isChecked():
             return 'linear_dimension'
+        if self.horizontal_dimension_tool_action and self.horizontal_dimension_tool_action.isChecked():
+            return 'horizontal_dimension'
+        if self.vertical_dimension_tool_action and self.vertical_dimension_tool_action.isChecked():
+            return 'vertical_dimension'
         if self.radial_dimension_tool_action and self.radial_dimension_tool_action.isChecked():
             return 'radial_dimension'
         if self.diameter_dimension_tool_action and self.diameter_dimension_tool_action.isChecked():
@@ -322,7 +332,7 @@ class CanvasWidget(QWidget):
 
     def _is_dimension_tool(self, tool_name: str | None = None) -> bool:
         tool_name = tool_name or self.get_active_drawing_tool()
-        return tool_name in {"linear_dimension", "radial_dimension", "diameter_dimension", "angular_dimension"}
+        return tool_name in {"linear_dimension", "horizontal_dimension", "vertical_dimension", "radial_dimension", "diameter_dimension", "angular_dimension"}
 
     def _reset_dimension_session(self):
         self.dimension_session = None
@@ -334,7 +344,7 @@ class CanvasWidget(QWidget):
         tool_name = tool_name or self.get_active_drawing_tool() or "linear_dimension"
         session = self.dimension_session or {"step": 0}
         step = session.get("step", 0)
-        if tool_name == "linear_dimension":
+        if tool_name in {"linear_dimension", "horizontal_dimension", "vertical_dimension"}:
             hints = {
                 0: "Выберите первую точку",
                 1: "Выберите вторую точку",
@@ -369,6 +379,18 @@ class CanvasWidget(QWidget):
             self.current_pos = None
         self._set_dimension_hint(tool_name)
 
+    def _resolve_linear_dimension_mode(self, active_tool: str | None = None) -> str:
+        """Определяет mode для LinearDimension на основе активного инструмента."""
+        active_tool = active_tool or self.get_active_drawing_tool()
+        if active_tool == "horizontal_dimension":
+            return "horizontal"
+        if active_tool == "vertical_dimension":
+            return "vertical"
+        # Для linear_dimension — берём из комбобокса панели
+        if self.dimension_input_panel:
+            return self.dimension_input_panel.get_linear_mode()
+        return "aligned"
+
     def _dimension_anchors_for_object(self, obj, tool_name: str):
         if tool_name == "radial_dimension":
             if isinstance(obj, Circle):
@@ -395,9 +417,9 @@ class CanvasWidget(QWidget):
         return None
 
     def _handle_dimension_left_click(self, active_tool: str, event: QMouseEvent, click_scene_pos: QPointF):
-        if active_tool == "linear_dimension":
+        if active_tool in {"linear_dimension", "horizontal_dimension", "vertical_dimension"}:
             _, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
-            mode = self.dimension_input_panel.get_linear_mode() if self.dimension_input_panel else "aligned"
+            mode = self._resolve_linear_dimension_mode(active_tool)
             if not self.dimension_session:
                 self.dimension_session = {"tool": active_tool, "step": 1, "anchors": [click_anchor]}
                 self.start_pos = self.map_from_scene(click_scene_pos)
@@ -1292,13 +1314,11 @@ class CanvasWidget(QWidget):
                     self.update()
                     return  # Не сбрасываем start_pos
 
-                elif active_tool == 'linear_dimension':
+                elif active_tool in {'linear_dimension', 'horizontal_dimension', 'vertical_dimension'}:
                     click_point, click_anchor = self._point_from_scene_or_snap(click_scene_pos)
                     start_point = Point(start_scene_pos.x(), start_scene_pos.y())
                     start_anchor = self._make_anchor_from_snap(self.current_snap_point) if self.current_snap_point else DimensionAnchor(mode="fixed", cached_point=start_point.copy())
-                    mode = "aligned"
-                    if self.dimension_input_panel:
-                        mode = self.dimension_input_panel.get_linear_mode()
+                    mode = self._resolve_linear_dimension_mode(active_tool)
 
                     if not self.construction_points:
                         self.construction_points = [start_anchor, click_anchor]
@@ -2740,8 +2760,8 @@ class CanvasWidget(QWidget):
                 last_screen = self.map_from_scene(QPointF(last_pt.x, last_pt.y))
                 painter.drawLine(last_screen.toPoint(), self.current_pos.toPoint())
 
-        elif active_tool == 'linear_dimension':
-            mode = self.dimension_input_panel.get_linear_mode() if self.dimension_input_panel else "aligned"
+        elif active_tool in {'linear_dimension', 'horizontal_dimension', 'vertical_dimension'}:
+            mode = self._resolve_linear_dimension_mode(active_tool)
             session = self.dimension_session or {}
             anchors = session.get("anchors", [])
             if len(anchors) < 2:

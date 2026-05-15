@@ -327,19 +327,19 @@ class LinearDimension(DimensionBase):
             normal = Point(0.0, 1.0)
             base1 = p1
             base2 = p2
-            offset = (placement.y - p1.y) if placement else gap
-            ext1 = Point(p1.x, p1.y + offset)
-            ext2 = Point(p2.x, p2.y + offset)
+            dim_y = placement.y if placement else max(p1.y, p2.y) + gap
+            ext1 = Point(p1.x, dim_y)
+            ext2 = Point(p2.x, dim_y)
             measure = abs(p2.x - p1.x)
             text_angle = 0.0
         elif self.mode == "vertical":
             axis = Point(0.0, 1.0)
-            normal = Point(1.0, 0.0)
+            normal = Point(-1.0, 0.0)
             base1 = p1
             base2 = p2
-            offset = (placement.x - p1.x) if placement else gap
-            ext1 = Point(p1.x + offset, p1.y)
-            ext2 = Point(p2.x + offset, p2.y)
+            dim_x = placement.x if placement else max(p1.x, p2.x) + gap
+            ext1 = Point(dim_x, p1.y)
+            ext2 = Point(dim_x, p2.y)
             measure = abs(p2.y - p1.y)
             text_angle = 90.0
         else:
@@ -388,9 +388,17 @@ class LinearDimension(DimensionBase):
         arrows = _linear_arrows(ext1, ext2, axis, arrow, arrows_inside)
         segments = [(ext1, ext2)] + leader_segments(leader_points, landing_points)
         ext_overshoot = float(self.dimension_style.get("extension_overshoot_mm", 2.0))
+        
+        def get_overshoot_pt(base, ext, default_norm):
+            vec = ext - base
+            l = math.hypot(vec.x, vec.y)
+            if l > 1e-9:
+                return Point(ext.x + (vec.x / l) * ext_overshoot, ext.y + (vec.y / l) * ext_overshoot)
+            return Point(ext.x + default_norm.x * ext_overshoot, ext.y + default_norm.y * ext_overshoot)
+            
         extension_lines = [
-            (base1, Point(ext1.x + normal.x * ext_overshoot, ext1.y + normal.y * ext_overshoot)),
-            (base2, Point(ext2.x + normal.x * ext_overshoot, ext2.y + normal.y * ext_overshoot)),
+            (base1, get_overshoot_pt(base1, ext1, normal)),
+            (base2, get_overshoot_pt(base2, ext2, normal)),
         ]
         snap_points = [base1, base2, ext1, ext2, text_position]
         if has_leader:
