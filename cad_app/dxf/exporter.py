@@ -203,9 +203,34 @@ def _dim_text_override(obj: DimensionBase) -> str:
 
     '<>' означает что CAD покажет вычисленное значение.
     """
+    native_prefix = ""
+    if isinstance(obj, RadialDimension):
+        native_prefix = "R"
+    elif isinstance(obj, DiameterDimension):
+        native_prefix = "Ø"
+
+    prefix = obj.text_prefix or ""
+    suffix = obj.text_suffix or ""
+    
+    # Заменяем символ диаметра на DXF-код
+    prefix_dxf = prefix.replace("Ø", "%%c")
+    suffix_dxf = suffix.replace("Ø", "%%c")
+
     if obj.text_override:
-        return obj.text_override
-    return "<>"
+        override_dxf = obj.text_override.replace("Ø", "%%c")
+        return f"{prefix_dxf}{override_dxf}{suffix_dxf}"
+    
+    if prefix == native_prefix:
+        # CAD сам подставит R или Ø вместо <>
+        if suffix:
+            return f"<>{suffix_dxf}"
+        return "<>"
+    else:
+        # Если префикс не совпадает с нативным (например, убрали 'R' или заменили на 'Ø'),
+        # использование <> приведёт к двойному префиксу (например, RØ50) или неудаляемому R.
+        # В таком случае вынужденно отдаём хардкод строку, чтобы перебить нативное поведение.
+        display = obj.format_measurement(obj.measured_value_cache)
+        return display.replace("Ø", "%%c")
 
 
 def _export_linear_dimension(msp, obj: LinearDimension, scene, dxfattribs: dict, report: dict) -> int:
