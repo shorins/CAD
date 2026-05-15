@@ -8,9 +8,19 @@ import math
 from types import SimpleNamespace
 from pathlib import Path
 
-from ..core.geometry import Arc, Circle, Ellipse, Line, PointEntity, Polygon, Rectangle, Spline, DimensionBase
+from ..core.geometry import (
+    Arc, Circle, Ellipse, Line, PointEntity, Polygon, Rectangle, Spline,
+    DimensionBase, LinearDimension, RadialDimension, DiameterDimension, AngularDimension,
+)
+from ..core.geometry.dimensions import global_dimension_text_height_mm, global_dimension_arrow_size_mm
 from ..core.layers import LayerRecord, default_layer
 from .mapping import DEFAULT_DXF_VERSION, apply_common_entity_attributes, map_style_to_linetype
+
+
+# ---------------------------------------------------------------------------
+#  Dimension style name used for all exported dimensions
+# ---------------------------------------------------------------------------
+_DIM_STYLE_NAME = "CAD_DIM"
 
 
 def export_dxf_file(scene, file_path: str | Path, version: str = DEFAULT_DXF_VERSION) -> dict:
@@ -36,6 +46,7 @@ def export_dxf_file(scene, file_path: str | Path, version: str = DEFAULT_DXF_VER
 
     _ensure_linetypes(doc, scene, report)
     _ensure_layers(doc, scene, report)
+    _ensure_dimension_style(doc)
 
     for obj in scene.objects:
         written = _export_object(doc, msp, obj, scene, report)
@@ -53,10 +64,7 @@ def _export_object(doc, msp, obj, scene, report: dict) -> int:
     layer = scene.layers.get(getattr(obj, "layer_name", "0"), default_layer())
 
     if isinstance(obj, DimensionBase):
-        report["warnings"].append(
-            f"Размерный объект {type(obj).__name__} пропущен при DXF-экспорте: DXF DIMENSION вне области поддержки"
-        )
-        return 0
+        return _export_dimension(doc, msp, obj, scene, layer, report)
 
     if isinstance(obj, PointEntity):
         entity = msp.add_point((obj.position.x, obj.position.y, 0.0))
@@ -119,6 +127,310 @@ def _export_object(doc, msp, obj, scene, report: dict) -> int:
 
     report["warnings"].append(f"Неизвестный объект {type(obj).__name__} пропущен при экспорте")
     return 0
+
+
+# ---------------------------------------------------------------------------
+#  Dimension export
+# ---------------------------------------------------------------------------
+
+def _ensure_dimension_style(doc):
+    """Создаёт единый DIMSTYLE для всех экспортируемых размеров."""
+    if _DIM_STYLE_NAME in doc.dimstyles:
+        return
+    text_height = global_dimension_text_height_mm()
+    arrow_size = global_dimension_arrow_size_mm()
+    doc.dimstyles.new(
+        _DIM_STYLE_NAME,
+        dxfattribs={
+            "dimtxt": text_height,       # высота текста
+            "dimasz": arrow_size,        # размер стрелки
+            "dimexe": 2.5,               # выступ выносной линии за размерную
+            "dimexo": 0.0,               # зазор от объекта до выносной
+            "dimgap": text_height * 0.1, # зазор текста
+            "dimtad": 1,                 # текст над линией
+            "dimtih": 0,                 # текст повторяет наклон
+            "dimtoh": 0,                 # текст повторяет наклон (снаружи)
+            "dimdec": 2,                 # кол-во десятичных знаков
+        },
+    )
+
+
+def _export_dimension(doc, msp, obj: DimensionBase, scene, layer: LayerRecord, report: dict) -> int:
+    """Экспортирует размерный объект как DXF DIMENSION entity."""
+    layer_name = getattr(obj, "layer_name", "0") or "0"
+    dxfattribs = {"layer": layer_name}
+
+    try:
+        if isinstance(obj, LinearDimension):
+            return _export_linear_dimension(msp, obj, scene, dxfattribs, report)
+        if isinstance(obj, RadialDimension):
+            return _export_radial_dimension(msp, obj, scene, dxfattribs, report)
+        if isinstance(obj, DiameterDimension):
+            return _export_diameter_dimension(msp, obj, scene, dxfattribs, report)
+        if isinstance(obj, AngularDimension):
+            return _export_angular_dimension(msp, obj, scene, dxfattribs, report)
+    except Exception as exc:
+        report["warnings"].append(
+            f"Ошибка экспорта размера {type(obj).__name__}: {exc}"
+        )
+        return 0
+
+    report["warnings"].append(
+        f"Неизвестный тип размера {type(obj).__name__} пропущен при DXF-экспорте"
+    )
+    return 0
+
+
+def _resolve_dim_points(obj, scene, anchor_names: list[str]) -> list | None:
+    """Извлекает и разрешает точки из якорей размера.
+
+    Возвращает список точек (x, y, 0) или None если не удалось.
+    """
+    points = []
+    for name in anchor_names:
+        anchor = getattr(obj, name, None)
+        if anchor is None:
+            return None
+        pt = obj._resolve_anchor(scene, anchor)
+        if pt is None:
+            return None
+        points.append((pt.x, pt.y, 0.0))
+    return points
+
+
+def _dim_text_override(obj: DimensionBase) -> str:
+    """Возвращает строку text override для DXF DIMENSION.
+
+    '<>' означает что CAD покажет вычисленное значение.
+    """
+    if obj.text_override:
+        return obj.text_override
+    return "<>"
+
+
+def _export_linear_dimension(msp, obj: LinearDimension, scene, dxfattribs: dict, report: dict) -> int:
+    """Экспортирует линейный размер (aligned / horizontal / vertical)."""
+    points = _resolve_dim_points(obj, scene, ["anchor1", "anchor2"])
+    if not points:
+        report["warnings"].append("LinearDimension: не удалось разрешить точки привязки")
+        return 0
+
+    p1, p2 = points[0], points[1]
+
+    # Определяем положение размерной линии из layout_state
+    text_pos = obj.layout_state.get("text_position")
+    dim_line_pos = None
+    segments = obj.layout_state.get("segments", [])
+    if segments:
+        # Первый сегмент — это размерная линия (ext1 → ext2)
+        ext1, ext2 = segments[0]
+        mid = ((ext1.x + ext2.x) / 2, (ext1.y + ext2.y) / 2, 0.0)
+        dim_line_pos = mid
+
+    text = _dim_text_override(obj)
+    override = _make_dim_style_override(obj)
+
+    if obj.mode == "horizontal":
+        base = dim_line_pos or (p1[0], p1[1] + 10, 0.0)
+        dim = msp.add_linear_dim(
+            base=base, p1=p1, p2=p2,
+            angle=0,
+            text=text,
+            dimstyle=_DIM_STYLE_NAME,
+            override=override,
+            dxfattribs=dxfattribs,
+        )
+    elif obj.mode == "vertical":
+        base = dim_line_pos or (p1[0] + 10, p1[1], 0.0)
+        dim = msp.add_linear_dim(
+            base=base, p1=p1, p2=p2,
+            angle=90,
+            text=text,
+            dimstyle=_DIM_STYLE_NAME,
+            override=override,
+            dxfattribs=dxfattribs,
+        )
+    else:
+        # aligned
+        # Вычисляем расстояние от p1 до размерной линии
+        if dim_line_pos:
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            length = math.hypot(dx, dy)
+            if length > 1e-9:
+                nx, ny = -dy / length, dx / length
+                distance = (dim_line_pos[0] - p1[0]) * nx + (dim_line_pos[1] - p1[1]) * ny
+            else:
+                distance = 10.0
+        else:
+            distance = 10.0
+
+        dim = msp.add_aligned_dim(
+            p1=p1, p2=p2,
+            distance=distance,
+            text=text,
+            dimstyle=_DIM_STYLE_NAME,
+            override=override,
+            dxfattribs=dxfattribs,
+        )
+
+    if text_pos and obj.text_position_override:
+        dim.dimension.dxf.text_midpoint = (text_pos.x, text_pos.y, 0.0)
+    dim.render()
+    return 1
+
+
+def _export_radial_dimension(msp, obj: RadialDimension, scene, dxfattribs: dict, report: dict) -> int:
+    """Экспортирует радиальный размер."""
+    points = _resolve_dim_points(obj, scene, ["anchor_center", "anchor_curve"])
+    if not points:
+        report["warnings"].append("RadialDimension: не удалось разрешить точки привязки")
+        return 0
+
+    center, curve = points[0], points[1]
+    radius = math.hypot(curve[0] - center[0], curve[1] - center[1])
+    if radius <= 1e-9:
+        report["warnings"].append("RadialDimension: нулевой радиус")
+        return 0
+
+    # Определяем направление размерной линии
+    placement = obj._resolve_anchor(scene, obj.dimension_line_anchor)
+    if placement:
+        dx = placement.x - center[0]
+        dy = placement.y - center[1]
+        angle = math.degrees(math.atan2(dy, dx))
+    else:
+        dx = curve[0] - center[0]
+        dy = curve[1] - center[1]
+        angle = math.degrees(math.atan2(dy, dx))
+
+    # Точка на окружности в направлении размерной линии
+    mpoint = (
+        center[0] + radius * math.cos(math.radians(angle)),
+        center[1] + radius * math.sin(math.radians(angle)),
+        0.0,
+    )
+
+    text = _dim_text_override(obj)
+    override = _make_dim_style_override(obj)
+
+    dim = msp.add_radius_dim(
+        center=center,
+        mpoint=mpoint,
+        text=text,
+        dimstyle=_DIM_STYLE_NAME,
+        override=override,
+        dxfattribs=dxfattribs,
+    )
+    dim.render()
+    return 1
+
+
+def _export_diameter_dimension(msp, obj: DiameterDimension, scene, dxfattribs: dict, report: dict) -> int:
+    """Экспортирует диаметральный размер."""
+    points = _resolve_dim_points(obj, scene, ["anchor_center", "anchor_curve"])
+    if not points:
+        report["warnings"].append("DiameterDimension: не удалось разрешить точки привязки")
+        return 0
+
+    center, curve = points[0], points[1]
+    radius = math.hypot(curve[0] - center[0], curve[1] - center[1])
+    if radius <= 1e-9:
+        report["warnings"].append("DiameterDimension: нулевой радиус")
+        return 0
+
+    # Определяем направление
+    placement = obj._resolve_anchor(scene, obj.dimension_line_anchor)
+    if placement:
+        dx = placement.x - center[0]
+        dy = placement.y - center[1]
+        angle = math.degrees(math.atan2(dy, dx))
+    else:
+        dx = curve[0] - center[0]
+        dy = curve[1] - center[1]
+        angle = math.degrees(math.atan2(dy, dx))
+
+    mpoint = (
+        center[0] + radius * math.cos(math.radians(angle)),
+        center[1] + radius * math.sin(math.radians(angle)),
+        0.0,
+    )
+
+    text = _dim_text_override(obj)
+    override = _make_dim_style_override(obj)
+
+    dim = msp.add_diameter_dim(
+        center=center,
+        mpoint=mpoint,
+        text=text,
+        dimstyle=_DIM_STYLE_NAME,
+        override=override,
+        dxfattribs=dxfattribs,
+    )
+    dim.render()
+    return 1
+
+
+def _export_angular_dimension(msp, obj: AngularDimension, scene, dxfattribs: dict, report: dict) -> int:
+    """Экспортирует угловой размер."""
+    points = _resolve_dim_points(obj, scene, ["vertex_anchor", "ray1_anchor", "ray2_anchor"])
+    if not points:
+        report["warnings"].append("AngularDimension: не удалось разрешить точки привязки")
+        return 0
+
+    vertex, ray1, ray2 = points[0], points[1], points[2]
+
+    # base — точка на дуге размерной линии, определяющая радиус
+    arc_data = obj.layout_state.get("arc")
+    if arc_data:
+        arc_center = arc_data["center"]
+        arc_radius = arc_data["radius"]
+        start_deg = arc_data["start_angle_deg"]
+        span_deg = arc_data["span_angle_deg"]
+        mid_angle_rad = math.radians(start_deg + span_deg / 2.0)
+        base = (
+            arc_center.x + arc_radius * math.cos(mid_angle_rad),
+            arc_center.y + arc_radius * math.sin(mid_angle_rad),
+            0.0,
+        )
+    else:
+        # Если нет arc data, используем placement
+        placement = obj._resolve_anchor(scene, obj.dimension_line_anchor)
+        if placement:
+            base = (placement.x, placement.y, 0.0)
+        else:
+            # Фоллбэк — средняя точка
+            base = ((ray1[0] + ray2[0]) / 2, (ray1[1] + ray2[1]) / 2, 0.0)
+
+    text = _dim_text_override(obj)
+    override = _make_dim_style_override(obj)
+    override["dimdec"] = obj.precision
+
+    text_pos = obj.layout_state.get("text_position")
+    location = (text_pos.x, text_pos.y, 0.0) if text_pos and obj.text_position_override else None
+
+    dim = msp.add_angular_dim_3p(
+        base=base,
+        center=vertex,
+        p1=ray1,
+        p2=ray2,
+        text=text,
+        dimstyle=_DIM_STYLE_NAME,
+        override=override,
+        location=location,
+        dxfattribs=dxfattribs,
+    )
+    dim.render()
+    return 1
+
+
+def _make_dim_style_override(obj: DimensionBase) -> dict:
+    """Создаёт словарь override для DimStyle на основе параметров объекта."""
+    override = {}
+    precision = obj.dimension_style.get("precision")
+    if precision is not None:
+        override["dimdec"] = int(precision)
+    return override
 
 
 def _export_rectangle(msp, obj: Rectangle, layer: LayerRecord, report: dict) -> int:
