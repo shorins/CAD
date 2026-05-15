@@ -215,6 +215,28 @@ def test_flip_arrows_changes_radial_arrow_direction():
     print("✓ test_flip_arrows_changes_radial_arrow_direction passed")
 
 
+def test_flip_arrows_changes_diameter_arrow_direction_when_outside():
+    scene = Scene()
+    circle = Circle(Point(0, 0), 10)
+    scene.add_object(circle)
+
+    dim = DiameterDimension(
+        DimensionAnchor(mode="object_snap", object_id=circle.object_id, selector="center", cached_point=circle.center.copy()),
+        DimensionAnchor(mode="object_snap", object_id=circle.object_id, selector="radius_point", cached_point=Point(circle.center.x + circle.radius, circle.center.y)),
+    )
+    dim.dimension_line_anchor = DimensionAnchor(mode="fixed", cached_point=Point(25, 0))
+    scene.add_object(dim)
+    tails_before = [(arrow["tail"].x, arrow["tail"].y) for arrow in dim.get_render_data()["arrows"]]
+
+    dim.flip_arrows()
+    scene.recompute_dimensions()
+    tails_after = [(arrow["tail"].x, arrow["tail"].y) for arrow in dim.get_render_data()["arrows"]]
+
+    assert tails_before != tails_after
+    assert dim.get_render_data()["arrows_are_outside"] is False
+    print("✓ test_flip_arrows_changes_diameter_arrow_direction_when_outside passed")
+
+
 def test_dxf_export_warns_and_skips_dimensions():
     scene = Scene()
     line = Line(Point(0, 0), Point(10, 0))
@@ -245,5 +267,6 @@ if __name__ == "__main__":
     test_diameter_dimension_supports_arc_with_single_arrow()
     test_manual_text_override_uses_horizontal_text_and_landing()
     test_flip_arrows_changes_radial_arrow_direction()
+    test_flip_arrows_changes_diameter_arrow_direction_when_outside()
     test_dxf_export_warns_and_skips_dimensions()
     print("\n✅ Все dimension-тесты пройдены успешно!")

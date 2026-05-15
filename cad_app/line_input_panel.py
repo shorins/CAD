@@ -238,6 +238,7 @@ class LineInputPanel(QWidget):
         validator.setDecimals(2)
         validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         line_edit.setValidator(validator)
+        line_edit.returnPressed.connect(self._on_build_clicked)
         
         container_layout.addWidget(line_edit)
         
@@ -278,7 +279,7 @@ class LineInputPanel(QWidget):
                 
                 # Проверяем, что все поля заполнены
                 if (start_x is None or start_y is None or r is None or theta is None):
-                    return  # Не все поля заполнены
+                    return False  # Не все поля заполнены
                 
                 # Конвертируем угол в радианы, если он в градусах
                 angle_units = settings.get("angle_units") or "degrees"
@@ -310,24 +311,65 @@ class LineInputPanel(QWidget):
                 # Проверяем, что все поля заполнены
                 if (start_x is None or start_y is None or 
                     end_x is None or end_y is None):
-                    return  # Не все поля заполнены
+                    return False  # Не все поля заполнены
                 
                 start_point = Point(start_x, start_y)
                 end_point = Point(end_x, end_y)
             
             # Проверяем, что точки не совпадают
             if abs(start_point.x - end_point.x) < 0.001 and abs(start_point.y - end_point.y) < 0.001:
-                return  # Игнорируем построение нулевой длины
+                return False  # Игнорируем построение нулевой длины
             
             # Отправляем сигнал для построения линии
             self.line_requested.emit(start_point, end_point)
             
             # Очищаем поля ввода после успешного построения
             self._clear_inputs()
+            return True
             
         except (ValueError, KeyError) as e:
             # Игнорируем ошибки валидации
             print(f"Ошибка при построении линии: {e}")
+            return False
+
+    def build_from_current_inputs(self) -> bool:
+        """Строит линию из текущих полей. Удобно вызывать по Enter из canvas."""
+        return bool(self._on_build_clicked())
+
+    def sync_from_points(self, start_point: Point, end_point: Point):
+        """Подтягивает текущие координаты построения в поля, не затирая активный ввод пользователя."""
+        mode = settings.get("line_construction_mode") or "cartesian"
+        if mode == "polar":
+            from PySide6.QtCore import QPointF
+            from .core.math_utils import cartesian_to_polar, radians_to_degrees
+
+            r, theta = cartesian_to_polar(QPointF(start_point.x, start_point.y), QPointF(end_point.x, end_point.y))
+            angle_units = settings.get("angle_units") or "degrees"
+            theta_value = radians_to_degrees(theta) if angle_units == "degrees" else theta
+            values = {
+                "X": start_point.x,
+                "Y": start_point.y,
+                "r": r,
+                "θ": theta_value,
+            }
+        else:
+            values = {
+                "X₁": start_point.x,
+                "Y₁": start_point.y,
+                "X₂": end_point.x,
+                "Y₂": end_point.y,
+            }
+
+        for label, value in values.items():
+            self._set_input_value(label, value)
+
+    def _set_input_value(self, label: str, value: float):
+        line_edit = self.coord_inputs.get(label)
+        if not line_edit or line_edit.hasFocus():
+            return
+        line_edit.blockSignals(True)
+        line_edit.setText(f"{value:.2f}")
+        line_edit.blockSignals(False)
     
     def _clear_inputs(self):
         """Очищает все поля ввода."""
@@ -341,4 +383,3 @@ class LineInputPanel(QWidget):
     def hide_panel(self):
         """Скрывает панель."""
         self.hide()
-

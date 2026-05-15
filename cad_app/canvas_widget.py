@@ -178,6 +178,7 @@ class CanvasWidget(QWidget):
         self.dimension_session = None
         
         # Ссылки на панели ввода (устанавливаются из MainWindow)
+        self.line_input_panel = None
         self.circle_input_panel = None
         self.arc_input_panel = None
         self.rectangle_input_panel = None
@@ -325,10 +326,12 @@ class CanvasWidget(QWidget):
         return point, DimensionAnchor(mode="fixed", cached_point=point.copy())
 
     def _normalize_dimension_text_angle(self, angle: float) -> float:
-        normalized = angle % 360.0
-        if 90.0 < normalized < 270.0:
-            normalized = (normalized + 180.0) % 360.0
-        return normalized
+        normalized = ((angle + 180.0) % 360.0) - 180.0
+        if normalized > 90.0:
+            normalized -= 180.0
+        elif normalized <= -90.0:
+            normalized += 180.0
+        return normalized % 360.0
 
     def _is_dimension_tool(self, tool_name: str | None = None) -> bool:
         tool_name = tool_name or self.get_active_drawing_tool()
@@ -337,6 +340,17 @@ class CanvasWidget(QWidget):
     def _reset_dimension_session(self):
         self.dimension_session = None
         self.construction_points = []
+
+    def cancel_current_construction(self):
+        """Сбрасывает текущее интерактивное построение после ввода/Enter/кнопки."""
+        self.start_pos = None
+        self.start_scene_point = None
+        self._reset_tangent_constraint()
+        self.current_pos = None
+        self.construction_points = []
+        self._reset_dimension_session()
+        self.line_info_changed.emit("")
+        self.update()
 
     def _set_dimension_hint(self, tool_name: str | None = None):
         if not self.dimension_input_panel:
@@ -371,6 +385,68 @@ class CanvasWidget(QWidget):
 
     def _dimension_preview_point(self, fallback_scene_pos: QPointF) -> tuple[Point, DimensionAnchor]:
         return self._point_from_scene_or_snap(fallback_scene_pos)
+
+    def _effective_line_end_point(self, scene_pos: QPointF) -> Point:
+        """Возвращает конечную точку линии с учетом Shift, polar mode, snap и tangent constraint."""
+        start_scene_pos = QPointF(self.start_scene_point.x, self.start_scene_point.y) if self.start_scene_point else self.map_to_scene(self.start_pos)
+        if self._tc_active and self._tc_direction:
+            d = self._tc_direction
+            v_x = scene_pos.x() - start_scene_pos.x()
+            v_y = scene_pos.y() - start_scene_pos.y()
+            t = max(0, v_x * d.x + v_y * d.y)
+            return Point(start_scene_pos.x() + d.x * t, start_scene_pos.y() + d.y * t)
+
+        if self._current_construction_mode == "polar":
+            end_point = self._calculate_end_point_polar(start_scene_pos, scene_pos)
+            return Point(end_point.x(), end_point.y())
+
+        if self.current_snap_point:
+            end_point = Point(self.current_snap_point.x, self.current_snap_point.y)
+        else:
+            end_point = Point(scene_pos.x(), scene_pos.y())
+
+        if self._is_shift_pressed():
+            dx = end_point.x - start_scene_pos.x()
+            dy = end_point.y - start_scene_pos.y()
+            if abs(dx) > abs(dy):
+                end_point.y = start_scene_pos.y()
+            else:
+                end_point.x = start_scene_pos.x()
+        return end_point
+
+    def _sync_active_input_panel(self):
+        """Синхронизирует нижнюю панель с текущим ручным построением."""
+        if not self.start_pos or not self.current_pos:
+            return
+
+        active_tool = self.get_active_drawing_tool()
+        start = self.start_scene_point or Point(self.map_to_scene(self.start_pos).x(), self.map_to_scene(self.start_pos).y())
+        current_scene_pos = (
+            QPointF(self.current_snap_point.x, self.current_snap_point.y)
+            if self.current_snap_point
+            else self.map_to_scene(self.current_pos)
+        )
+
+        if active_tool == "line" and self.line_input_panel:
+            self.line_input_panel.sync_from_points(start, self._effective_line_end_point(current_scene_pos))
+        elif active_tool == "circle" and self.circle_input_panel:
+            points = []
+            if self.circle_input_panel.get_current_method() == "three_points":
+                points = list(self.construction_points) if self.construction_points else [start]
+            else:
+                points = [start]
+            self.circle_input_panel.sync_from_construction(points, Point(current_scene_pos.x(), current_scene_pos.y()))
+
+    def _build_from_active_input_panel(self) -> bool:
+        active_tool = self.get_active_drawing_tool()
+        if active_tool == "line" and self.line_input_panel:
+            return self.line_input_panel.build_from_current_inputs()
+        if active_tool == "circle" and self.circle_input_panel:
+            return self.circle_input_panel.build_from_current_inputs()
+        if active_tool == "spline" and self.spline_input_panel:
+            self.finish_spline()
+            return True
+        return False
 
     def sync_dimension_tool(self, tool_name: str | None):
         if self.dimension_session and self.dimension_session.get("tool") != tool_name:
@@ -761,19 +837,33 @@ class CanvasWidget(QWidget):
         
         # Обработка Escape для отмены построения линии
         if event.key() == Qt.Key.Key_Escape and self.start_pos:
-            self.start_pos = None
-            self.start_scene_point = None
-            self._reset_tangent_constraint()
-            self.current_pos = None
+            self.cancel_current_construction()
+            event.accept()
+            return
+
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._build_from_active_input_panel():
+                event.accept()
+                return
+
+        if event.key() == Qt.Key.Key_Shift and self.start_pos and self.current_pos:
+            self._update_snap_point(self.current_pos)
+            self._sync_active_input_panel()
             self.update()
             event.accept()
-        else:
-            super().keyPressEvent(event)
+            return
+            
+        super().keyPressEvent(event)
     
     def keyReleaseEvent(self, event):
         """Обрабатывает отпускание клавиш."""
         if event.key() == Qt.Key.Key_R:
             self.r_key_pressed = False
+            event.accept()
+        elif event.key() == Qt.Key.Key_Shift and self.start_pos and self.current_pos:
+            self._update_snap_point(self.current_pos)
+            self._sync_active_input_panel()
+            self.update()
             event.accept()
         else:
             super().keyReleaseEvent(event)
@@ -1057,28 +1147,14 @@ class CanvasWidget(QWidget):
                         self.construction_points = [clicked_object]
                 
                 self._update_line_info()
+                self._sync_active_input_panel()
             else:
                 # Второй клик - завершение построения
                 start_scene_pos = QPointF(self.start_scene_point.x, self.start_scene_point.y) if self.start_scene_point else self.map_to_scene(self.start_pos)
                 
                 if active_tool == 'line':
                     # Линия: от start до end
-                    if self._tc_active and self._tc_direction:
-                        # Tangent constraint — endpoint из проекции на луч
-                        d = self._tc_direction
-                        v_x = click_scene_pos.x() - start_scene_pos.x()
-                        v_y = click_scene_pos.y() - start_scene_pos.y()
-                        t = max(0, v_x * d.x + v_y * d.y)
-                        end_point = Point(start_scene_pos.x() + d.x * t,
-                                          start_scene_pos.y() + d.y * t)
-                    elif self._current_construction_mode == "polar":
-                        cursor_pos = self.current_pos if self.current_pos else event.position()
-                        current_scene_pos = self.map_to_scene(cursor_pos)
-                        end_point_qpoint = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
-                        end_point = Point(end_point_qpoint.x(), end_point_qpoint.y())
-                    else:
-                        end_point = Point(click_scene_pos.x(), click_scene_pos.y())
-                    
+                    end_point = self._effective_line_end_point(click_scene_pos)
                     start_point = Point(start_scene_pos.x(), start_scene_pos.y())
                     obj = Line(start_point, end_point, style_name=current_style)
                     self.scene.add_object(obj)
@@ -1580,6 +1656,7 @@ class CanvasWidget(QWidget):
                 self._handle_tangent_constraint(event.position())
             
             self._update_line_info()  # Обновляем информацию о линии при движении
+            self._sync_active_input_panel()
             self.update()
         elif self.is_drawing_tool_active():
             # Если инструмент рисования активен, но построение ещё не начато - ищем привязки
@@ -2419,7 +2496,21 @@ class CanvasWidget(QWidget):
                 end_screen = self.map_from_scene(end_point)
                 painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
             else:
-                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+                if self.current_snap_point:
+                    end_scene_pos = QPointF(self.current_snap_point.x, self.current_snap_point.y)
+                else:
+                    end_scene_pos = current_scene_pos
+                
+                if self._is_shift_pressed():
+                    dx = end_scene_pos.x() - start_scene_pos.x()
+                    dy = end_scene_pos.y() - start_scene_pos.y()
+                    if abs(dx) > abs(dy):
+                        end_scene_pos.setY(start_scene_pos.y())
+                    else:
+                        end_scene_pos.setX(start_scene_pos.x())
+
+                end_screen = self.map_from_scene(end_scene_pos)
+                painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
         
         elif active_tool == 'circle':
             # Получаем метод построения
@@ -3419,6 +3510,24 @@ class CanvasWidget(QWidget):
             reference_point = Point(start_scene_pos.x(), start_scene_pos.y())
         include_dimensions = not self._is_dimension_tool()
         
+        current_ray = None
+        if self.get_active_drawing_tool() == 'line' and self.start_scene_point and self._is_shift_pressed():
+            start_pt = self.start_scene_point
+            dx = scene_pos.x() - start_pt.x
+            dy = scene_pos.y() - start_pt.y
+            
+            length = 100000.0  # arbitrary large number
+            if abs(dx) > abs(dy):
+                # horizontal ray
+                dir_x = 1 if dx > 0 else -1
+                end_pt = Point(start_pt.x + dir_x * length, start_pt.y)
+                current_ray = Line(start_pt, end_pt)
+            else:
+                # vertical ray
+                dir_y = 1 if dy > 0 else -1
+                end_pt = Point(start_pt.x, start_pt.y + dir_y * length)
+                current_ray = Line(start_pt, end_pt)
+
         snap_point = snap_manager.find_snap(
             scene_pos.x(), scene_pos.y(),
             self.scene.objects,
@@ -3427,6 +3536,7 @@ class CanvasWidget(QWidget):
             grid_size=settings.get("grid_step") or settings.defaults["grid_step"],
             zoom_factor=self.zoom_factor,
             include_dimensions=include_dimensions,
+            current_ray=current_ray,
         )
         
         # Обновляем только если изменилось

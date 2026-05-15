@@ -140,7 +140,8 @@ class SnapManager(QObject):
                   reference_point: Optional[tuple] = None,
                   grid_size: Optional[float] = None,
                   zoom_factor: float = 1.0,
-                  include_dimensions: bool = True) -> Optional[SnapPoint]:
+                  include_dimensions: bool = True,
+                  current_ray: Optional[GeometricPrimitive] = None) -> Optional[SnapPoint]:
         """
         Находит лучшую точку привязки с учётом приоритетов.
         При близких расстояниях побеждает привязка с высшим приоритетом.
@@ -228,6 +229,14 @@ class SnapManager(QObject):
                 for sp in intersections:
                     dist = sp.distance_to(scene_x, scene_y)
                     _consider(sp, dist)
+                    
+            if current_ray:
+                for obj in nearby_objects:
+                    intersections = self.find_intersection(current_ray, obj)
+                    for sp in intersections:
+                        dist = sp.distance_to(scene_x, scene_y)
+                        sp.snap_type = SnapType.INTERSECTION
+                        _consider(sp, dist)
 
         # 3. Контекстные привязки (Perpendicular, Tangent)
         if reference_point:
