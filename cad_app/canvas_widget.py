@@ -326,10 +326,12 @@ class CanvasWidget(QWidget):
         return point, DimensionAnchor(mode="fixed", cached_point=point.copy())
 
     def _normalize_dimension_text_angle(self, angle: float) -> float:
-        normalized = angle % 360.0
-        if 90.0 < normalized < 270.0:
-            normalized = (normalized + 180.0) % 360.0
-        return normalized
+        normalized = ((angle + 180.0) % 360.0) - 180.0
+        if normalized > 90.0:
+            normalized -= 180.0
+        elif normalized <= -90.0:
+            normalized += 180.0
+        return normalized % 360.0
 
     def _is_dimension_tool(self, tool_name: str | None = None) -> bool:
         tool_name = tool_name or self.get_active_drawing_tool()
