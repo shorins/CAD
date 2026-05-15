@@ -677,7 +677,7 @@ class DiameterDimension(DimensionBase):
 
         leader_points, landing_points = _horizontal_text_landing_layout(near, text_position, text_w, text_h)
         segments = [(start, end)] + leader_segments(leader_points, landing_points)
-        arrows_inside = fit_result == "inside" and not self.arrows_flipped
+        arrows_inside = (fit_result == "inside") != self.arrows_flipped
         arrows = _linear_arrows(start, end, axis, arrow, arrows_inside)
         self.layout_state = {
             "segments": segments,
