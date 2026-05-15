@@ -767,13 +767,24 @@ class CanvasWidget(QWidget):
             self.current_pos = None
             self.update()
             event.accept()
-        else:
-            super().keyPressEvent(event)
+            return
+
+        if event.key() == Qt.Key.Key_Shift and self.start_pos and self.current_pos:
+            self._update_snap_point(self.current_pos)
+            self.update()
+            event.accept()
+            return
+            
+        super().keyPressEvent(event)
     
     def keyReleaseEvent(self, event):
         """Обрабатывает отпускание клавиш."""
         if event.key() == Qt.Key.Key_R:
             self.r_key_pressed = False
+            event.accept()
+        elif event.key() == Qt.Key.Key_Shift and self.start_pos and self.current_pos:
+            self._update_snap_point(self.current_pos)
+            self.update()
             event.accept()
         else:
             super().keyReleaseEvent(event)
@@ -1077,7 +1088,18 @@ class CanvasWidget(QWidget):
                         end_point_qpoint = self._calculate_end_point_polar(start_scene_pos, current_scene_pos)
                         end_point = Point(end_point_qpoint.x(), end_point_qpoint.y())
                     else:
-                        end_point = Point(click_scene_pos.x(), click_scene_pos.y())
+                        if self.current_snap_point:
+                            end_point = Point(self.current_snap_point.x, self.current_snap_point.y)
+                        else:
+                            end_point = Point(click_scene_pos.x(), click_scene_pos.y())
+                            
+                        if self._is_shift_pressed():
+                            dx = end_point.x - start_scene_pos.x()
+                            dy = end_point.y - start_scene_pos.y()
+                            if abs(dx) > abs(dy):
+                                end_point.y = start_scene_pos.y()
+                            else:
+                                end_point.x = start_scene_pos.x()
                     
                     start_point = Point(start_scene_pos.x(), start_scene_pos.y())
                     obj = Line(start_point, end_point, style_name=current_style)
@@ -2419,7 +2441,21 @@ class CanvasWidget(QWidget):
                 end_screen = self.map_from_scene(end_point)
                 painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
             else:
-                painter.drawLine(self.start_pos.toPoint(), self.current_pos.toPoint())
+                if self.current_snap_point:
+                    end_scene_pos = QPointF(self.current_snap_point.x, self.current_snap_point.y)
+                else:
+                    end_scene_pos = current_scene_pos
+                
+                if self._is_shift_pressed():
+                    dx = end_scene_pos.x() - start_scene_pos.x()
+                    dy = end_scene_pos.y() - start_scene_pos.y()
+                    if abs(dx) > abs(dy):
+                        end_scene_pos.setY(start_scene_pos.y())
+                    else:
+                        end_scene_pos.setX(start_scene_pos.x())
+
+                end_screen = self.map_from_scene(end_scene_pos)
+                painter.drawLine(self.start_pos.toPoint(), end_screen.toPoint())
         
         elif active_tool == 'circle':
             # Получаем метод построения
@@ -3419,6 +3455,27 @@ class CanvasWidget(QWidget):
             reference_point = Point(start_scene_pos.x(), start_scene_pos.y())
         include_dimensions = not self._is_dimension_tool()
         
+        current_ray = None
+        if self.get_active_drawing_tool() == 'line' and self.start_scene_point and self._is_shift_pressed():
+            start_pt = self.start_scene_point
+            dx = scene_pos.x() - start_pt.x
+            dy = scene_pos.y() - start_pt.y
+            
+            from .core.geometry.line import Line
+            from .core.geometry.point import Point
+            
+            length = 100000.0  # arbitrary large number
+            if abs(dx) > abs(dy):
+                # horizontal ray
+                dir_x = 1 if dx > 0 else -1
+                end_pt = Point(start_pt.x + dir_x * length, start_pt.y)
+                current_ray = Line(start_pt, end_pt)
+            else:
+                # vertical ray
+                dir_y = 1 if dy > 0 else -1
+                end_pt = Point(start_pt.x, start_pt.y + dir_y * length)
+                current_ray = Line(start_pt, end_pt)
+
         snap_point = snap_manager.find_snap(
             scene_pos.x(), scene_pos.y(),
             self.scene.objects,
@@ -3427,6 +3484,7 @@ class CanvasWidget(QWidget):
             grid_size=settings.get("grid_step") or settings.defaults["grid_step"],
             zoom_factor=self.zoom_factor,
             include_dimensions=include_dimensions,
+            current_ray=current_ray,
         )
         
         # Обновляем только если изменилось
