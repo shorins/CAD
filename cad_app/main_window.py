@@ -60,6 +60,8 @@ class MainWindow(QMainWindow):
             'polygon': self.polygon_tool_action,
             'spline': self.spline_tool_action,
             'linear_dimension': self.linear_dimension_tool_action,
+            'horizontal_dimension': self.horizontal_dimension_tool_action,
+            'vertical_dimension': self.vertical_dimension_tool_action,
             'radial_dimension': self.radial_dimension_tool_action,
             'diameter_dimension': self.diameter_dimension_tool_action,
             'angular_dimension': self.angular_dimension_tool_action,
@@ -96,6 +98,8 @@ class MainWindow(QMainWindow):
         self.polygon_tool_action.toggled.connect(self._update_tool_label)
         self.spline_tool_action.toggled.connect(self._update_tool_label)
         self.linear_dimension_tool_action.toggled.connect(self._update_tool_label)
+        self.horizontal_dimension_tool_action.toggled.connect(self._update_tool_label)
+        self.vertical_dimension_tool_action.toggled.connect(self._update_tool_label)
         self.radial_dimension_tool_action.toggled.connect(self._update_tool_label)
         self.diameter_dimension_tool_action.toggled.connect(self._update_tool_label)
         self.angular_dimension_tool_action.toggled.connect(self._update_tool_label)
@@ -115,6 +119,8 @@ class MainWindow(QMainWindow):
         self.polygon_tool_action.toggled.connect(self._on_tool_toggled)
         self.spline_tool_action.toggled.connect(self._on_tool_toggled)
         self.linear_dimension_tool_action.toggled.connect(self._on_tool_toggled)
+        self.horizontal_dimension_tool_action.toggled.connect(self._on_tool_toggled)
+        self.vertical_dimension_tool_action.toggled.connect(self._on_tool_toggled)
         self.radial_dimension_tool_action.toggled.connect(self._on_tool_toggled)
         self.diameter_dimension_tool_action.toggled.connect(self._on_tool_toggled)
         self.angular_dimension_tool_action.toggled.connect(self._on_tool_toggled)
@@ -185,7 +191,15 @@ class MainWindow(QMainWindow):
 
         self.linear_dimension_tool_action = QAction("Лин. размер", self)
         self.linear_dimension_tool_action.setCheckable(True)
-        self.linear_dimension_tool_action.setToolTip("Линейный размер")
+        self.linear_dimension_tool_action.setToolTip("Линейный размер (выровненный)")
+
+        self.horizontal_dimension_tool_action = QAction("Гориз.", self)
+        self.horizontal_dimension_tool_action.setCheckable(True)
+        self.horizontal_dimension_tool_action.setToolTip("Горизонтальный размер")
+
+        self.vertical_dimension_tool_action = QAction("Верт.", self)
+        self.vertical_dimension_tool_action.setCheckable(True)
+        self.vertical_dimension_tool_action.setToolTip("Вертикальный размер")
 
         self.radial_dimension_tool_action = QAction("Радиус", self)
         self.radial_dimension_tool_action.setCheckable(True)
@@ -283,6 +297,8 @@ class MainWindow(QMainWindow):
         tool_group.addAction(self.polygon_tool_action)
         tool_group.addAction(self.spline_tool_action)
         tool_group.addAction(self.linear_dimension_tool_action)
+        tool_group.addAction(self.horizontal_dimension_tool_action)
+        tool_group.addAction(self.vertical_dimension_tool_action)
         tool_group.addAction(self.radial_dimension_tool_action)
         tool_group.addAction(self.diameter_dimension_tool_action)
         tool_group.addAction(self.angular_dimension_tool_action)
@@ -304,6 +320,8 @@ class MainWindow(QMainWindow):
         edit_toolbar.addAction(self.spline_tool_action)
         edit_toolbar.addSeparator()
         edit_toolbar.addAction(self.linear_dimension_tool_action)
+        edit_toolbar.addAction(self.horizontal_dimension_tool_action)
+        edit_toolbar.addAction(self.vertical_dimension_tool_action)
         edit_toolbar.addAction(self.radial_dimension_tool_action)
         edit_toolbar.addAction(self.diameter_dimension_tool_action)
         edit_toolbar.addAction(self.angular_dimension_tool_action)
@@ -393,6 +411,8 @@ class MainWindow(QMainWindow):
             self.spline_input_toolbar.show()
         elif (
             self.linear_dimension_tool_action.isChecked()
+            or self.horizontal_dimension_tool_action.isChecked()
+            or self.vertical_dimension_tool_action.isChecked()
             or self.radial_dimension_tool_action.isChecked()
             or self.diameter_dimension_tool_action.isChecked()
             or self.angular_dimension_tool_action.isChecked()
@@ -904,6 +924,10 @@ class MainWindow(QMainWindow):
             self.tool_label.setText("Инструмент: Сплайн")
         elif self.linear_dimension_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Линейный размер")
+        elif self.horizontal_dimension_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Горизонтальный размер")
+        elif self.vertical_dimension_tool_action.isChecked():
+            self.tool_label.setText("Инструмент: Вертикальный размер")
         elif self.radial_dimension_tool_action.isChecked():
             self.tool_label.setText("Инструмент: Радиус")
         elif self.diameter_dimension_tool_action.isChecked():
