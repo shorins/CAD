@@ -270,6 +270,7 @@ class CircleInputPanel(QWidget):
         validator.setDecimals(2)
         validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         line_edit.setValidator(validator)
+        line_edit.returnPressed.connect(self._on_build_clicked)
         
         container_layout.addWidget(line_edit)
         self.coord_inputs[label] = line_edit
@@ -296,7 +297,7 @@ class CircleInputPanel(QWidget):
                 r = self._parse_float(self.coord_inputs["R"].text())
                 
                 if xc is None or yc is None or r is None or r <= 0:
-                    return
+                    return False
                 
                 circle = Circle(Point(xc, yc), r)
             
@@ -306,7 +307,7 @@ class CircleInputPanel(QWidget):
                 d = self._parse_float(self.coord_inputs["D"].text())
                 
                 if xc is None or yc is None or d is None or d <= 0:
-                    return
+                    return False
                 
                 circle = Circle(Point(xc, yc), d / 2)
             
@@ -317,7 +318,7 @@ class CircleInputPanel(QWidget):
                 y2 = self._parse_float(self.coord_inputs["Y₂"].text())
                 
                 if x1 is None or y1 is None or x2 is None or y2 is None:
-                    return
+                    return False
                 
                 p1 = Point(x1, y1)
                 p2 = Point(x2, y2)
@@ -332,7 +333,7 @@ class CircleInputPanel(QWidget):
                 y3 = self._parse_float(self.coord_inputs["Y₃"].text())
                 
                 if any(v is None for v in [x1, y1, x2, y2, x3, y3]):
-                    return
+                    return False
                 
                 p1 = Point(x1, y1)
                 p2 = Point(x2, y2)
@@ -342,9 +343,53 @@ class CircleInputPanel(QWidget):
             if circle:
                 self.circle_requested.emit(circle)
                 self._clear_inputs()
+                return True
+            return False
                 
         except Exception as e:
             print(f"Ошибка при построении окружности: {e}")
+            return False
+
+    def build_from_current_inputs(self) -> bool:
+        """Строит окружность из текущих полей. Удобно вызывать по Enter из canvas."""
+        return bool(self._on_build_clicked())
+
+    def sync_from_construction(self, points: list[Point], cursor_point: Point | None = None):
+        """Подтягивает текущие точки ручного построения в поля ввода."""
+        all_points = list(points)
+        if cursor_point is not None:
+            all_points.append(cursor_point)
+
+        if self._current_method == "center_radius":
+            if len(all_points) >= 1:
+                self._set_input_value("Xc", all_points[0].x)
+                self._set_input_value("Yc", all_points[0].y)
+            if len(all_points) >= 2:
+                self._set_input_value("R", all_points[0].distance_to(all_points[1]))
+        elif self._current_method == "center_diameter":
+            if len(all_points) >= 1:
+                self._set_input_value("Xc", all_points[0].x)
+                self._set_input_value("Yc", all_points[0].y)
+            if len(all_points) >= 2:
+                self._set_input_value("D", all_points[0].distance_to(all_points[1]) * 2.0)
+        elif self._current_method == "two_points":
+            labels = (("X₁", "Y₁"), ("X₂", "Y₂"))
+            for index, point in enumerate(all_points[:2]):
+                self._set_input_value(labels[index][0], point.x)
+                self._set_input_value(labels[index][1], point.y)
+        elif self._current_method == "three_points":
+            labels = (("X₁", "Y₁"), ("X₂", "Y₂"), ("X₃", "Y₃"))
+            for index, point in enumerate(all_points[:3]):
+                self._set_input_value(labels[index][0], point.x)
+                self._set_input_value(labels[index][1], point.y)
+
+    def _set_input_value(self, label: str, value: float):
+        line_edit = self.coord_inputs.get(label)
+        if not line_edit or line_edit.hasFocus():
+            return
+        line_edit.blockSignals(True)
+        line_edit.setText(f"{value:.2f}")
+        line_edit.blockSignals(False)
     
     def _clear_inputs(self):
         """Очищает все поля ввода."""

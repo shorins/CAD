@@ -487,10 +487,12 @@ class MainWindow(QMainWindow):
         """Обработчик запроса на построение линии из панели ввода."""
         line = Line(start_point, end_point)
         self.scene.add_object(line)
+        self.canvas.cancel_current_construction()
     
     def _on_circle_build_requested(self, circle: Circle):
         """Обработчик запроса на построение окружности из панели ввода."""
         self.scene.add_object(circle)
+        self.canvas.cancel_current_construction()
     
     def _on_arc_build_requested(self, arc: Arc):
         """Обработчик запроса на построение дуги из панели ввода."""
@@ -627,6 +629,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, self.dimension_input_toolbar)
         
         # Передаём ссылки на панели в canvas для получения метода построения
+        self.canvas.line_input_panel = self.line_input_panel
         self.canvas.circle_input_panel = self.circle_input_panel
         self.canvas.arc_input_panel = self.arc_input_panel
         self.canvas.rectangle_input_panel = self.rectangle_input_panel
