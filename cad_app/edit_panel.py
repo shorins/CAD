@@ -253,6 +253,15 @@ class EditPanel(QWidget):
         self.dim_line_style.currentIndexChanged.connect(self._on_dimension_line_style_changed)
         self.dim_ext_style.currentIndexChanged.connect(self._on_dimension_extension_style_changed)
 
+        self.dim_text_prefix = QComboBox()
+        self.dim_text_prefix.addItem("Без префикса", "")
+        self.dim_text_prefix.addItem("Радиус (R)", "R")
+        self.dim_text_prefix.addItem("Диаметр (Ø)", "Ø")
+        prefix_index = self.dim_text_prefix.findData(obj.text_prefix)
+        self.dim_text_prefix.setCurrentIndex(max(0, prefix_index))
+        self.dim_text_prefix.currentIndexChanged.connect(self._on_dimension_text_prefix_changed)
+
+        layout.addRow("Символ:", self.dim_text_prefix)
         layout.addRow("Текст override:", self.dim_text_override)
         layout.addRow("Точность:", self.dim_precision)
         layout.addRow("Тип стрелки:", self.dim_arrow_type)
@@ -298,6 +307,11 @@ class EditPanel(QWidget):
     def _on_dimension_text_override_changed(self, value: str):
         if self.current_object and isinstance(self.current_object, DimensionBase):
             self.current_object.text_override = value or None
+            self._emit_change()
+
+    def _on_dimension_text_prefix_changed(self, index: int):
+        if self.current_object and isinstance(self.current_object, DimensionBase):
+            self.current_object.text_prefix = self.dim_text_prefix.itemData(index)
             self._emit_change()
 
     def _on_dimension_precision_changed(self, value: int):

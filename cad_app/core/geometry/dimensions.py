@@ -114,7 +114,7 @@ class DimensionBase(GeometricPrimitive):
     @property
     def display_text(self) -> str:
         if self.text_override:
-            return self.text_override
+            return f"{self.text_prefix}{self.text_override}{self.text_suffix}"
         return self.format_measurement(self.measured_value_cache)
 
     def format_measurement(self, value: float) -> str:
@@ -127,6 +127,8 @@ class DimensionBase(GeometricPrimitive):
         return {
             "dimension_style": dict(self.dimension_style),
             "text_override": self.text_override,
+            "text_prefix": self.text_prefix,
+            "text_suffix": self.text_suffix,
             "text_position_override": self.text_position_override.to_dict() if self.text_position_override else None,
             "is_associative": self.is_associative,
             "is_orphaned": self.is_orphaned,
@@ -149,9 +151,15 @@ class DimensionBase(GeometricPrimitive):
         elif "arrow_fill" in self.dimension_style:
             self.dimension_style["arrow_type"] = "closed_filled" if self.dimension_style.get("arrow_fill", True) else "closed"
             self.dimension_style.pop("arrow_fill", None)
+
         self.text_override = data.get("text_override")
-        text_pos = data.get("text_position_override")
-        self.text_position_override = Point.from_dict(text_pos) if text_pos else None
+        if "text_prefix" in data:
+            self.text_prefix = data["text_prefix"]
+        if "text_suffix" in data:
+            self.text_suffix = data["text_suffix"]
+
+        pos_data = data.get("text_position_override")
+        self.text_position_override = Point.from_dict(pos_data) if pos_data else None
         self.is_associative = bool(data.get("is_associative", self.is_associative))
         self.is_orphaned = bool(data.get("is_orphaned", self.is_orphaned))
         self.measured_value_cache = float(data.get("measured_value_cache", self.measured_value_cache))
