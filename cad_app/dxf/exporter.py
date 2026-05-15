@@ -381,6 +381,7 @@ def _export_angular_dimension(msp, obj: AngularDimension, scene, dxfattribs: dic
     vertex, ray1, ray2 = points[0], points[1], points[2]
 
     # base — точка на дуге размерной линии, определяющая радиус
+    # Также извлекаем фактические p1 и p2, так как CAD мог поменять их местами для отрисовки внутри/снаружи угла
     arc_data = obj.layout_state.get("arc")
     if arc_data:
         arc_center = arc_data["center"]
@@ -393,6 +394,16 @@ def _export_angular_dimension(msp, obj: AngularDimension, scene, dxfattribs: dic
             arc_center.y + arc_radius * math.sin(mid_angle_rad),
             0.0,
         )
+        # Чтобы выносные линии рисовались правильно (от исходных объектов до размерной линии), 
+        # мы должны передать исходные ray1 и ray2 в качестве p1 и p2. 
+        # Но если CAD нарисовал угол "с другой стороны", он поменял a1 и a2 местами. 
+        # Мы проверяем, соответствует ли start_angle_deg углу луча ray1. Если нет — меняем p1 и p2 местами.
+        orig_a1 = math.degrees(math.atan2(ray1[1] - vertex[1], ray1[0] - vertex[0]))
+        diff = abs((start_deg % 360) - (orig_a1 % 360))
+        if diff > 1e-3 and abs(diff - 360) > 1e-3:
+            p1, p2 = ray2, ray1
+        else:
+            p1, p2 = ray1, ray2
     else:
         # Если нет arc data, используем placement
         placement = obj._resolve_anchor(scene, obj.dimension_line_anchor)
@@ -401,6 +412,7 @@ def _export_angular_dimension(msp, obj: AngularDimension, scene, dxfattribs: dic
         else:
             # Фоллбэк — средняя точка
             base = ((ray1[0] + ray2[0]) / 2, (ray1[1] + ray2[1]) / 2, 0.0)
+        p1, p2 = ray1, ray2
 
     text = _dim_text_override(obj)
     override = _make_dim_style_override(obj)
@@ -412,8 +424,8 @@ def _export_angular_dimension(msp, obj: AngularDimension, scene, dxfattribs: dic
     dim = msp.add_angular_dim_3p(
         base=base,
         center=vertex,
-        p1=ray1,
-        p2=ray2,
+        p1=p1,
+        p2=p2,
         text=text,
         dimstyle=_DIM_STYLE_NAME,
         override=override,
