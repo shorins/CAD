@@ -189,27 +189,27 @@ class MainWindow(QMainWindow):
         self.spline_tool_action.setToolTip("Сплайн (S)")
         self.spline_tool_action.setShortcut("S")
 
-        self.linear_dimension_tool_action = QAction("Лин. размер", self)
+        self.linear_dimension_tool_action = QAction(load_svg_icon("public/dimensions/dimension_line_aligned.svg"), "Лин. размер", self)
         self.linear_dimension_tool_action.setCheckable(True)
         self.linear_dimension_tool_action.setToolTip("Линейный размер (выровненный)")
 
-        self.horizontal_dimension_tool_action = QAction("Гориз.", self)
+        self.horizontal_dimension_tool_action = QAction(load_svg_icon("public/dimensions/dimension_line_horizontal.svg"), "Гориз.", self)
         self.horizontal_dimension_tool_action.setCheckable(True)
         self.horizontal_dimension_tool_action.setToolTip("Горизонтальный размер")
 
-        self.vertical_dimension_tool_action = QAction("Верт.", self)
+        self.vertical_dimension_tool_action = QAction(load_svg_icon("public/dimensions/dimension_line_vertical.svg"), "Верт.", self)
         self.vertical_dimension_tool_action.setCheckable(True)
         self.vertical_dimension_tool_action.setToolTip("Вертикальный размер")
 
-        self.radial_dimension_tool_action = QAction("Радиус", self)
+        self.radial_dimension_tool_action = QAction(load_svg_icon("public/dimensions/dimension_radius.svg"), "Радиус", self)
         self.radial_dimension_tool_action.setCheckable(True)
         self.radial_dimension_tool_action.setToolTip("Радиальный размер")
 
-        self.diameter_dimension_tool_action = QAction("Диаметр", self)
+        self.diameter_dimension_tool_action = QAction(load_svg_icon("public/dimensions/dimension_diameter.svg"), "Диаметр", self)
         self.diameter_dimension_tool_action.setCheckable(True)
         self.diameter_dimension_tool_action.setToolTip("Диаметральный размер")
 
-        self.angular_dimension_tool_action = QAction("Угол", self)
+        self.angular_dimension_tool_action = QAction(load_svg_icon("public/dimensions/dimension_angular.svg"), "Угол", self)
         self.angular_dimension_tool_action.setCheckable(True)
         self.angular_dimension_tool_action.setToolTip("Угловой размер")
 
