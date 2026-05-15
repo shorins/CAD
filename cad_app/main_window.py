@@ -284,6 +284,9 @@ class MainWindow(QMainWindow):
     def _create_toolbars(self):
         # Палитра инструментов
         edit_toolbar = QToolBar("Инструменты")
+        edit_toolbar.setIconSize(QSize(18, 18))
+        edit_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        edit_toolbar.setStyleSheet("QToolButton { padding: 4px; margin: 0px; } QToolBar { spacing: 0px; }")
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, edit_toolbar)
         
         # Группируем инструменты, чтобы одновременно был активен только один
